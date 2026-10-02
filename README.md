@@ -16,7 +16,8 @@ con `git pull`.
  2. live-host-probe    host     -> quali rispondono su HTTP/S     (attivo)
  3. port-scan          host/IP  -> IP + porte aperte + servizi    (attivo)
  4. service-audit      IP       -> check su FTP/MySQL/Postgres/SMTP trovati (attivo)
- 5. recon-report       (tutto)  -> unisce 2+3 in un'unica vista leggibile
+ 5. web-enum           host/URL -> stack tecnologico + route/API nascoste  (attivo)
+ 6. recon-report       (tutto)  -> unisce 2+3 in un'unica vista leggibile
 ```
 
 Ogni step e' indipendente: puoi lanciarli singolarmente, o incatenarli
@@ -29,7 +30,8 @@ passando l'output di uno come input del successivo (ogni script accetta
 | 2 | `live_hosts.py` | `recon/live-host-probe/` | [recon/live-host-probe/execute.md](recon/live-host-probe/execute.md) |
 | 3 | `resolve_and_scan.py` | `recon/port-scan/` | [recon/port-scan/execute.md](recon/port-scan/execute.md) |
 | 4 | `service_audit.py` | `recon/service-audit/` | [recon/service-audit/execute.md](recon/service-audit/execute.md) |
-| 5 | `consolidate.py` | `recon/report/` | [recon/report/execute.md](recon/report/execute.md) |
+| 5 | `web_enum.py` | `recon/web-enum/` | [recon/web-enum/execute.md](recon/web-enum/execute.md) |
+| 6 | `consolidate.py` | `recon/report/` | [recon/report/execute.md](recon/report/execute.md) |
 
 **Ogni cartella ha il suo `execute.md`** con tutti i casi d'uso concreti
 (profili, passthrough di flag, esempi copia-incolla). E' il primo posto
@@ -45,7 +47,7 @@ output/<nome-tool>/<dominio-target>/<timestamp>/<file-di-risultato>
 
 - **`<nome-tool>`** identifica *quale script* ha prodotto il risultato
   (`subdomain-enum`, `live-host-probe`, `port-scan`, `service-audit`,
-  `recon-report`) — cosi' scansioni diverse sullo stesso dominio non si
+  `web-enum`, `recon-report`) — cosi' scansioni diverse sullo stesso dominio non si
   mescolano mai in cartelle indistinguibili.
 - **`<dominio-target>`** raggruppa i run per target: se passi piu'
   sottodomini dello stesso apex (es. `a.staging.example.com`,
@@ -85,6 +87,9 @@ python3 recon/report/consolidate.py \
 
 python3 recon/service-audit/service_audit.py --active output/port-scan/$D/latest/results.json --label $D
 # -> output/service-audit/$D/latest/audit.txt
+
+python3 recon/web-enum/web_enum.py -iL output/live-host-probe/$D/latest/live_hosts.txt --label $D
+# -> output/web-enum/$D/latest/web_enum.txt  (stack + route + endpoint API dai JS)
 ```
 
 ## Convenzioni comuni a tutti gli script

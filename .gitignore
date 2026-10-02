@@ -1,0 +1,19 @@
+# Secrets & config
+.env
+*.env
+!.env.example
+
+# Scan output (per-target, non va nel repo)
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

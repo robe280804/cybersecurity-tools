@@ -46,6 +46,13 @@ invece di invocare il tool sbagliato.
 - `live_hosts.txt` → solo gli URL vivi, uno per riga (pronto per il port scan)
 - `live_hosts.json` → dettagli completi: status, titolo, tech, server, flag usate, `dead_hosts`
 
+### Timestamp e scorciatoia `latest`
+Timestamp in **ora locale** leggibile: `2026-10-02_08-51-11` (non UTC). Ogni
+run aggiorna anche `<base>/<label>/latest` (symlink all'ultimo run):
+```bash
+cat output/example.com/latest/live_hosts.txt
+```
+
 ### Host senza risposta
 Un host che non risponde (DNS fallito, connessione rifiutata, timeout) viene
 **segnalato esplicitamente** su stderr e incluso nel campo `dead_hosts` del

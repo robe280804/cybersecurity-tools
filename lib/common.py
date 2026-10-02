@@ -117,7 +117,7 @@ def default_label(hosts: list[str]) -> str:
     passato --label esplicitamente.
 
     Usa il piu' lungo suffisso di dominio comune a TUTTI gli host (es. per
-    ["a.staging.netseven.it", "b.prod.netseven.it"] -> "netseven.it"),
+    ["a.staging.example.com", "b.prod.example.com"] -> "example.com"),
     cosi' piu' run sullo stesso target finiscono nella stessa cartella anche
     se l'ordine degli host in input cambia. Il primo host come fallback e'
     fragile e order-dependent: con un file di 26 sottodomini, il default
@@ -142,10 +142,37 @@ def default_label(hosts: list[str]) -> str:
 
 
 def make_outdir(base: Path, label: str) -> Path:
-    """Crea e ritorna <base>/<label>/<timestamp UTC>/."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    """Crea e ritorna <base>/<label>/<timestamp locale leggibile>/.
+
+    Ora locale (non UTC): nmap e gli altri tool scrivono i loro log con
+    l'orario di sistema, usare UTC per il nome della cartella li faceva
+    disallineare (es. nmap "04:51:11" ma cartella "085111") rendendo
+    difficile capire a colpo d'occhio quale run corrisponde a quale log.
+
+    Formato con separatori (2026-10-02_08-51-11) invece del blocco compatto
+    di cifre: resta ordinabile alfabeticamente come prima, ma si legge.
+
+    Crea anche (o aggiorna) <base>/<label>/latest come collegamento
+    simbolico all'ultimo run, per non dover cercare il timestamp a mano.
+    Su piattaforme/permessi che non supportano i symlink, fallisce in modo
+    silenzioso (non blocca lo script: e' solo una comodita').
+    """
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     outdir = base / label / stamp
     outdir.mkdir(parents=True, exist_ok=True)
+
+    latest = base / label / "latest"
+    try:
+        if latest.is_symlink() or latest.exists():
+            if latest.is_symlink() or latest.is_file():
+                latest.unlink()
+            else:
+                import shutil as _shutil
+                _shutil.rmtree(latest)
+        latest.symlink_to(stamp, target_is_directory=True)
+    except OSError:
+        pass  # niente permessi/supporto symlink: non e' bloccante
+
     return outdir
 
 

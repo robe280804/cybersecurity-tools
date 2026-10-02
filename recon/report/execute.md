@@ -18,6 +18,9 @@ Output in `<base>/<label>/<timestamp>/`:
 - `report.md` — tabelle Markdown, leggibile/condivisibile
 - `report.txt` — stesso contenuto, formato compatto da terminale (anche su stdout)
 
+Timestamp in **ora locale** leggibile (`2026-10-02_08-51-11`, non UTC); ogni
+run aggiorna anche `<base>/<label>/latest` (symlink all'ultimo run).
+
 ## Input
 
 | Flag | Obbligatorio | Da dove |
@@ -42,20 +45,20 @@ Se `--live` non viene passato, lo stato HTTP di ogni dominio e' `unknown`
 
 ### Base — solo porte/IP, senza stato HTTP
 ```bash
-python3 consolidate.py --active ../active/output/netseven.it/<ts>/results.json
+python3 consolidate.py --active ../active/output/example.com/<ts>/results.json
 ```
 
 ### Completo — porte + stato HTTP
 ```bash
 python3 consolidate.py \
-  --active ../active/output/netseven.it/<ts>/results.json \
-  --live   ../discovery/output/netseven.it/<ts>/live_hosts.json
+  --active ../active/output/example.com/<ts>/results.json \
+  --live   ../discovery/output/example.com/<ts>/live_hosts.json
 ```
 
 ### Pipeline completa in un unico script di esempio
 ```bash
 cd recon
-D=netseven.it
+D=example.com
 TS_ACTIVE=$(ls active/output/$D | tail -1)
 TS_LIVE=$(ls discovery/output/$D | tail -1)
 python3 report/consolidate.py \

@@ -70,8 +70,16 @@ inferiore al numero di input.
 - Path **relativo** → risolto dalla radice del repo
 - Path **assoluto** → usato così com'è
 - `--label` → nome della sotto-cartella (default: suffisso di dominio comune
-  a tutti gli input, es. `netseven.it` per una lista di sottodomini misti di
+  a tutti gli input, es. `example.com` per una lista di sottodomini misti di
   quell'apex; se non c'e' un suffisso comune, il primo input)
+
+### Timestamp e scorciatoia `latest`
+Timestamp in **ora locale** leggibile: `2026-10-02_08-51-11` (non UTC — combacia
+con gli orari nei log di nmap). Ogni run aggiorna anche `<base>/<label>/latest`
+(symlink all'ultimo run):
+```bash
+cat output/example.com/latest/results.json
+```
 
 ---
 

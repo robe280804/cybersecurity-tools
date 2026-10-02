@@ -30,6 +30,17 @@ Un tool non installato viene **saltato con warning** (non blocca gli altri).
 - **Path relativo** (es. `-o results`) → risolto dalla **radice del repo** → `<radice>/results/...`
 - **Path assoluto** (es. `-o /tmp/scan`) → usato così com'è
 
+### Timestamp e scorciatoia `latest`
+Il timestamp della cartella e' in **ora locale**, leggibile: `2026-10-02_08-51-11`
+(non UTC — cosi' combacia con gli orari che vedi nei log di nmap/altri tool).
+Ogni run aggiorna anche `<base>/<label>/latest` (symlink all'ultimo run),
+cosi' non devi cercare il timestamp a mano:
+```bash
+cat output/example.com/latest/subdomains.txt
+```
+(il symlink richiede permessi adeguati; se non disponibile viene saltato
+senza bloccare lo script — su Kali funziona con un utente normale)
+
 ---
 
 ## Casi d'uso

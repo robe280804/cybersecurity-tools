@@ -105,6 +105,9 @@ def source_amass(domain: str, timeout: int, extra: list[str]) -> set[str]:
     return {h for line in lines if (h := normalize(line, domain))}
 
 
+# Identifica questo script nella struttura di output: output/<TOOL_NAME>/<label>/<timestamp>/
+TOOL_NAME = "subdomain-enum"
+
 SOURCES = {
     "crtsh": source_crtsh,
     "subfinder": source_subfinder,
@@ -206,7 +209,7 @@ def main() -> int:
 
     # Output: <base>/<dominio>/<timestamp>/
     base = common.resolve_output_base(args.output)
-    outdir = common.make_outdir(base, domain)
+    outdir = common.make_outdir(base, TOOL_NAME, domain)
 
     # Esecuzione parallela delle sorgenti
     per_source: dict[str, set[str]] = {}

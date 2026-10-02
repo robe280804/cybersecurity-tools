@@ -1,7 +1,9 @@
 # execute.md — `resolve_and_scan.py`
 
+**Tool:** `port-scan` → output sempre in `output/port-scan/<label>/<timestamp>/`
+
 Dati uno o piu' **domini** (o IP): li **risolve in IP** e fa un **port scan**
-delle porte aperte. Output in `<base>/<label>/<timestamp>/`
+delle porte aperte. Output in `<base>/port-scan/<label>/<timestamp>/`
 (`results.json` + output grezzo dello scanner).
 
 > ⚠️ Il port scan e' **attivita' attiva**: genera traffico verso il target.
@@ -75,10 +77,10 @@ inferiore al numero di input.
 
 ### Timestamp e scorciatoia `latest`
 Timestamp in **ora locale** leggibile: `2026-10-02_08-51-11` (non UTC — combacia
-con gli orari nei log di nmap). Ogni run aggiorna anche `<base>/<label>/latest`
+con gli orari nei log di nmap). Ogni run aggiorna anche `<base>/port-scan/<label>/latest`
 (symlink all'ultimo run):
 ```bash
-cat output/example.com/latest/results.json
+cat ../../output/port-scan/example.com/latest/results.json
 ```
 
 ---
@@ -108,10 +110,11 @@ EOF
 python3 resolve_and_scan.py -iL domains.txt
 ```
 
-### Concatenato con lo step passivo (subdomains.txt)
+### Concatenato con lo step precedente (subdomains.txt di subdomain-enum)
 ```bash
-# prima: subdomains_passive.py ha prodotto output/example.com/<ts>/subdomains.txt
-python3 resolve_and_scan.py -iL ../../output/example.com/20261002-120000/subdomains.txt --label example.com
+# prima: subdomains_passive.py (tool "subdomain-enum") ha prodotto
+# output/subdomain-enum/example.com/<ts>/subdomains.txt
+python3 resolve_and_scan.py -iL ../../output/subdomain-enum/example.com/latest/subdomains.txt --label example.com
 ```
 
 ### Profili

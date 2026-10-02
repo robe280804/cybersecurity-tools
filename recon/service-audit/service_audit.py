@@ -6,7 +6,7 @@ verificare misconfigurazioni comuni — SOLO check passivi/non distruttivi
 (login anonimo, password vuota, open relay, versione vulnerabile nota).
 Nessun bruteforce di credenziali, nessun DoS.
 
-Input: --active results.json (da recon/active/resolve_and_scan.py).
+Input: --active results.json (da recon/port-scan/resolve_and_scan.py).
 Per ogni host, individua le porte con servizi noti e lancia solo gli NSE
 script pertinenti a quelle porte (non uno scan a tappeto).
 
@@ -89,11 +89,32 @@ FINDING_RULES: list[tuple[str, object, str]] = [
      "MEDIUM: smtp-open-relay ha prodotto output anomalo (verificare manualmente: possibile relay aperto)"),
 ]
 
+# Identifica questo script nella struttura di output: output/<TOOL_NAME>/<label>/<timestamp>/
+TOOL_NAME = "service-audit"
+
 PROFILES: dict[str, dict[str, list[str]]] = {
     "stealth": {"nmap": ["-T2", "--version-intensity", "2"]},
     "normal": {"nmap": ["-T3", "--version-intensity", "5"]},
     "aggressive": {"nmap": ["-T4", "--version-intensity", "9"]},
 }
+
+
+def extract_domains(active: dict) -> list[str]:
+    """Legge il campo 'domains' di ogni host, accettando entrambi i formati
+    con cui puo' presentarsi a seconda dello step che ha generato il JSON:
+      - results.json (resolve_and_scan.py): lista di stringhe
+      - report.json  (consolidate.py):      lista di {"domain": ..., "http": ...}
+    Le porte sono gia' compatibili tra i due formati (stessa struttura),
+    quindi questo script accetta entrambi come --active: basta normalizzare
+    solo questo campo, usato unicamente per il nome di default della cartella."""
+    names: list[str] = []
+    for h in active.get("hosts", []):
+        for d in h.get("domains", []):
+            if isinstance(d, str):
+                names.append(d)
+            elif isinstance(d, dict) and d.get("domain"):
+                names.append(d["domain"])
+    return names
 
 
 def collect_targets(active: dict) -> dict[str, list[dict]]:
@@ -230,10 +251,10 @@ def main() -> int:
 
     common.log(f"Host con servizi da auditare: {len(targets)}  |  Profilo: {args.profile}")
 
-    domains_all = [d for h in active.get("hosts", []) for d in h.get("domains", [])] or list(targets)
+    domains_all = extract_domains(active) or list(targets)
     base = common.resolve_output_base(args.output)
     label = args.label or common.default_label(domains_all)
-    outdir = common.make_outdir(base, label)
+    outdir = common.make_outdir(base, TOOL_NAME, label)
 
     audits: list[dict] = []
     with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:

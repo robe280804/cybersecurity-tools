@@ -1,7 +1,9 @@
 # execute.md — `service_audit.py`
 
+**Tool:** `service-audit` → output sempre in `output/service-audit/<label>/<timestamp>/`
+
 Audit mirato dei servizi **non-web** gia' individuati da
-`recon/active/resolve_and_scan.py` (FTP, MySQL, PostgreSQL, SMTP/IMAP/POP3):
+`recon/port-scan/resolve_and_scan.py` (FTP, MySQL, PostgreSQL, SMTP/IMAP/POP3):
 usa gli **NSE script di nmap** per verificare misconfigurazioni comuni.
 
 > ⚠️ Attivita' attiva: tentativi reali di login anonimo/password vuota,
@@ -64,8 +66,10 @@ l'output raw.
 ## Casi d'uso
 
 ### Base — tutti i servizi auditabili trovati nello scan attivo
+`output/` vive alla radice del repo — da qui (`recon/service-audit/`) ci si
+arriva con `../../output/...`:
 ```bash
-python3 service_audit.py --active ../active/output/<target>/latest/results.json
+python3 service_audit.py --active ../../output/port-scan/<target>/latest/results.json
 ```
 
 ### Profili
@@ -85,11 +89,14 @@ python3 service_audit.py --active results.json -o results --label cliente-x
 ```
 
 ### Pipeline completa (dalla recon all'audit)
+Con `-o run1` (base custom) la struttura resta `run1/<tool>/<label>/<timestamp>/`.
+Lancia dalla **radice del repo** (regola unica per tutti gli script: script
+col path completo, cosi' `-o run1` e i path letti in input restano coerenti
+con la stessa cartella):
 ```bash
-cd recon
-python3 passive/subdomains_passive.py -d example.com -o run1
-python3 active/resolve_and_scan.py -iL run1/example.com/latest/subdomains.txt -o run1 --label example.com
-python3 audit/service_audit.py --active run1/example.com/latest/results.json -o run1 --label example.com
+python3 recon/subdomain-enum/subdomains_passive.py -d example.com -o run1
+python3 recon/port-scan/resolve_and_scan.py -iL run1/subdomain-enum/example.com/latest/subdomains.txt -o run1 --label example.com
+python3 recon/service-audit/service_audit.py --active run1/port-scan/example.com/latest/results.json -o run1 --label example.com
 ```
 
 ---
@@ -98,7 +105,7 @@ python3 audit/service_audit.py --active run1/example.com/latest/results.json -o 
 
 | Flag | Default | Descrizione |
 |---|---|---|
-| `--active` | *(obbligatorio)* | `results.json` di `resolve_and_scan.py` |
+| `--active` | *(obbligatorio)* | `results.json` di `resolve_and_scan.py` **oppure** `report.json` di `consolidate.py` (schema porte compatibile tra i due) |
 | `-o, --output` | `<radice>/output` | Cartella base (relativa alla radice o assoluta) |
 | `--label` | suffisso di dominio comune ai domini in input | Nome sotto-cartella output |
 | `--profile` | `normal` | `stealth` \| `normal` \| `aggressive` |

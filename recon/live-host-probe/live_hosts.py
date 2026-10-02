@@ -159,6 +159,9 @@ def probe_builtin(hosts: list[str], concurrency: int, timeout: int, insecure: bo
 
 
 # Preset di aggressivita': per httpx = flag CLI; per builtin = concorrenza/timeout.
+# Identifica questo script nella struttura di output: output/<TOOL_NAME>/<label>/<timestamp>/
+TOOL_NAME = "live-host-probe"
+
 PROFILES: dict[str, dict] = {
     "stealth": {
         "httpx": ["-rate-limit", "10", "-threads", "5"],
@@ -280,7 +283,7 @@ def main() -> int:
 
     base = common.resolve_output_base(args.output)
     label = args.label or common.default_label(inputs)
-    outdir = common.make_outdir(base, label)
+    outdir = common.make_outdir(base, TOOL_NAME, label)
 
     txt_path = outdir / "live_hosts.txt"
     txt_path.write_text(

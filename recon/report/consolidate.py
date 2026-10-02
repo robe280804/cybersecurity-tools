@@ -5,8 +5,8 @@ Consolida i risultati di una campagna di recon in un'unica vista leggibile:
     IP -> porte/servizi (+ PTR) -> domini che ci puntano -> stato HTTP
 
 Prende in input i JSON prodotti dagli step precedenti:
-  --active  results.json      (da recon/active/resolve_and_scan.py, obbligatorio)
-  --live    live_hosts.json   (da recon/discovery/live_hosts.py, opzionale)
+  --active  results.json      (da recon/port-scan/resolve_and_scan.py, obbligatorio)
+  --live    live_hosts.json   (da recon/live-host-probe/live_hosts.py, opzionale)
 
 Il collegamento domini<->HTTP live si fa sul nome host (non sullo scheme),
 quindi un dominio con sia http:// che https:// vivi compare con entrambe le
@@ -28,6 +28,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from lib import common  # noqa: E402
+
+
+# Identifica questo script nella struttura di output: output/<TOOL_NAME>/<label>/<timestamp>/
+TOOL_NAME = "recon-report"
 
 
 def load_json(path: str, required: bool) -> dict | None:
@@ -185,7 +189,7 @@ def main() -> int:
     domains_all = [d["domain"] for h in report["hosts"] for d in h["domains"]] or ["report"]
     base = common.resolve_output_base(args.output)
     label = args.label or common.default_label(domains_all)
-    outdir = common.make_outdir(base, label)
+    outdir = common.make_outdir(base, TOOL_NAME, label)
 
     (outdir / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     (outdir / "report.md").write_text(render_markdown(report), encoding="utf-8")

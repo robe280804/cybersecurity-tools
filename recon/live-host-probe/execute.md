@@ -1,12 +1,14 @@
 # execute.md — `live_hosts.py`
 
+**Tool:** `live-host-probe` → output sempre in `output/live-host-probe/<label>/<timestamp>/`
+
 Dati **host/sottodomini**, trova quali rispondono su **HTTP/HTTPS** e con
 quali metadati (status code, titolo, tech-stack, web server). E' lo step
 intermedio tra la recon passiva (`subdomains_passive.py`) e il port scan
 (`resolve_and_scan.py`): restringe la lista a cio' che e' effettivamente
 vivo prima di spendere tempo a scansionare porte.
 
-Output in `<base>/<label>/<timestamp>/` (`live_hosts.txt` + `live_hosts.json`).
+Output in `<base>/live-host-probe/<label>/<timestamp>/` (`live_hosts.txt` + `live_hosts.json`).
 
 > ⚠️ E' gia' un probe HTTP **attivo**: invia richieste reali al target.
 > Usalo solo su host di tua proprieta' o per cui hai autorizzazione.
@@ -48,9 +50,9 @@ invece di invocare il tool sbagliato.
 
 ### Timestamp e scorciatoia `latest`
 Timestamp in **ora locale** leggibile: `2026-10-02_08-51-11` (non UTC). Ogni
-run aggiorna anche `<base>/<label>/latest` (symlink all'ultimo run):
+run aggiorna anche `<base>/live-host-probe/<label>/latest` (symlink all'ultimo run):
 ```bash
-cat output/example.com/latest/live_hosts.txt
+cat ../../output/live-host-probe/example.com/latest/live_hosts.txt
 ```
 
 ### Host senza risposta
@@ -78,9 +80,9 @@ EOF
 python3 live_hosts.py -iL domains.txt
 ```
 
-### Concatenato con lo step passivo
+### Concatenato con lo step precedente (subdomains.txt di subdomain-enum)
 ```bash
-python3 live_hosts.py -iL ../../output/example.com/<timestamp>/subdomains.txt --label example.com
+python3 live_hosts.py -iL ../../output/subdomain-enum/example.com/latest/subdomains.txt --label example.com
 ```
 
 ### Senza httpx installato (fallback builtin esplicito, utile anche su Windows)
@@ -115,11 +117,15 @@ python3 live_hosts.py -d example.com --timeout 20
 python3 live_hosts.py -d example.com --json
 ```
 
-### Pipeline completa: passive -> live -> scan
+### Pipeline completa: subdomain-enum -> live-host-probe -> port-scan
+Con `-o run1` (base custom) la struttura resta `run1/<tool>/<label>/<timestamp>/`.
+Lancia dalla **radice del repo** (regola unica per tutti gli script: script
+col path completo, cosi' `-o run1` e i path letti in input restano coerenti
+con la stessa cartella):
 ```bash
-python3 ../passive/subdomains_passive.py -d example.com -o run1
-python3 live_hosts.py -iL run1/example.com/<ts>/subdomains.txt -o run1 --label example.com
-python3 ../active/resolve_and_scan.py -iL run1/example.com/<ts>/subdomains.txt -o run1 --label example.com
+python3 recon/subdomain-enum/subdomains_passive.py -d example.com -o run1
+python3 recon/live-host-probe/live_hosts.py -iL run1/subdomain-enum/example.com/latest/subdomains.txt -o run1 --label example.com
+python3 recon/port-scan/resolve_and_scan.py -iL run1/subdomain-enum/example.com/latest/subdomains.txt -o run1 --label example.com
 ```
 
 ---

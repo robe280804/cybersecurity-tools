@@ -141,27 +141,35 @@ def default_label(hosts: list[str]) -> str:
     return hosts[0]
 
 
-def make_outdir(base: Path, label: str) -> Path:
-    """Crea e ritorna <base>/<label>/<timestamp locale leggibile>/.
+def make_outdir(base: Path, tool: str, label: str) -> Path:
+    """Crea e ritorna <base>/<tool>/<label>/<timestamp locale leggibile>/.
 
-    Ora locale (non UTC): nmap e gli altri tool scrivono i loro log con
-    l'orario di sistema, usare UTC per il nome della cartella li faceva
-    disallineare (es. nmap "04:51:11" ma cartella "085111") rendendo
-    difficile capire a colpo d'occhio quale run corrisponde a quale log.
+    Il livello <tool> (es. "subdomain-enum", "port-scan") identifica quale
+    script ha prodotto l'output: senza di esso, scansioni diverse sullo
+    stesso dominio finiscono in cartelle sorelle indistinguibili dal nome,
+    e per capire cosa contengono devi aprirle. Ogni script passa il proprio
+    nome fisso (vedi costante TOOL_NAME in cima al file).
 
-    Formato con separatori (2026-10-02_08-51-11) invece del blocco compatto
-    di cifre: resta ordinabile alfabeticamente come prima, ma si legge.
+    <label> raggruppa per dominio/suffisso comune (vedi default_label):
+    run diversi sullo stesso target restano insieme sotto lo stesso tool.
 
-    Crea anche (o aggiorna) <base>/<label>/latest come collegamento
+    Ora locale (non UTC) per il timestamp: nmap e gli altri tool scrivono i
+    loro log con l'orario di sistema, usare UTC per il nome della cartella
+    li faceva disallineare (es. nmap "04:51:11" ma cartella "085111")
+    rendendo difficile capire a colpo d'occhio quale run corrisponde a quale
+    log. Formato con separatori (2026-10-02_08-51-11) invece del blocco
+    compatto di cifre: resta ordinabile alfabeticamente come prima, ma si legge.
+
+    Crea anche (o aggiorna) <base>/<tool>/<label>/latest come collegamento
     simbolico all'ultimo run, per non dover cercare il timestamp a mano.
     Su piattaforme/permessi che non supportano i symlink, fallisce in modo
     silenzioso (non blocca lo script: e' solo una comodita').
     """
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    outdir = base / label / stamp
+    outdir = base / tool / label / stamp
     outdir.mkdir(parents=True, exist_ok=True)
 
-    latest = base / label / "latest"
+    latest = base / tool / label / "latest"
     try:
         if latest.is_symlink() or latest.exists():
             if latest.is_symlink() or latest.is_file():

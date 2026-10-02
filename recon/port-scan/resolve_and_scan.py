@@ -254,6 +254,9 @@ def scan_masscan(ips: list[str], flags: list[str], outdir: Path, timeout: int) -
     return results
 
 
+# Identifica questo script nella struttura di output: output/<TOOL_NAME>/<label>/<timestamp>/
+TOOL_NAME = "port-scan"
+
 SCANNERS = {"nmap": scan_nmap, "naabu": scan_naabu, "masscan": scan_masscan}
 
 # Preset di flag per scanner e profilo.
@@ -386,7 +389,7 @@ def main() -> int:
     # --- Output dir ---
     base = common.resolve_output_base(args.output)
     label = args.label or common.default_label(inputs)
-    outdir = common.make_outdir(base, label)
+    outdir = common.make_outdir(base, TOOL_NAME, label)
 
     # --- Fase 2: scan ---
     port_results = SCANNERS[args.scanner](unique_ips, flags, outdir, args.timeout)

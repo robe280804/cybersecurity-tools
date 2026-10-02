@@ -55,6 +55,17 @@ invece di invocare il tool sbagliato.
 python3 live_hosts.py -d example.com
 ```
 
+### File .txt di domini (scritto a mano o generato da un altro step)
+Un dominio/host per riga; righe vuote e righe che iniziano con `#` sono ignorate.
+```bash
+cat > domains.txt << 'EOF'
+example.com
+api.example.com
+# commento, viene ignorato
+EOF
+python3 live_hosts.py -iL domains.txt
+```
+
 ### Concatenato con lo step passivo
 ```bash
 python3 live_hosts.py -iL ../../output/example.com/<timestamp>/subdomains.txt --label example.com

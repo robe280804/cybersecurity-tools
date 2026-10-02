@@ -26,11 +26,24 @@ Tool non installato → viene **saltato con warning**, non blocca.
 
 | | nmap | naabu | masscan |
 |---|---|---|---|
-| `stealth` | `-T2 --top-ports 100` | `-rate 100 -top-ports 100` | `--rate 100 -p 1-1000` |
-| `normal` | `-T3 --top-ports 1000` | `-top-ports 1000` | `--rate 1000 -p 1-1000` |
-| `aggressive` | `-T4 --top-ports 1000 -sV` | `-rate 1000 -top-ports 1000` | `--rate 5000 -p 1-65535` |
+| `stealth` | `-Pn -T2 --top-ports 100` | `-rate 100 -top-ports 100` | `--rate 100 -p 1-1000` |
+| `normal` | `-Pn -T3 --top-ports 1000` | `-top-ports 1000` | `--rate 1000 -p 1-1000` |
+| `aggressive` | `-Pn -T4 --top-ports 1000 -sV` | `-rate 1000 -top-ports 1000` | `--rate 5000 -p 1-65535` |
 
 Le flag di `--scanner-args` vengono **appese dopo** quelle del profilo (vincono).
+
+### Perche' `-Pn` di default su nmap
+nmap, prima di scansionare le porte, fa un **host discovery** (ping). Molti
+server web **bloccano ICMP** pur rispondendo su TCP 80/443 — senza `-Pn`
+nmap li marca "0 hosts up" e **salta del tutto** il port scan, dando un falso
+negativo silenzioso (nessun errore, solo nessuna porta riportata). `-Pn`
+tratta ogni IP come "up" e forza il probe diretto delle porte.
+
+Nota: `-Pn` ha priorita' su nmap anche se aggiungi altri flag `-P*` via
+`--scanner-args` (il passthrough si limita ad *appendere*, non toglie flag
+gia' nel preset). Se in un caso specifico vuoi davvero riattivare l'host
+discovery, modifica il preset in `PROFILES` nello script, oppure lancia
+nmap direttamente.
 
 ## Input
 
@@ -64,6 +77,18 @@ python3 resolve_and_scan.py -d example.com
 ```bash
 python3 resolve_and_scan.py -d example.com -d api.example.com
 python3 resolve_and_scan.py -d example.com,api.example.com,www.example.com
+```
+
+### File .txt di domini (scritto a mano o generato da un altro step)
+Un dominio/host per riga; righe vuote e righe che iniziano con `#` sono ignorate.
+```bash
+cat > domains.txt << 'EOF'
+example.com
+api.example.com
+# commento, viene ignorato
+10.0.0.5
+EOF
+python3 resolve_and_scan.py -iL domains.txt
 ```
 
 ### Concatenato con lo step passivo (subdomains.txt)

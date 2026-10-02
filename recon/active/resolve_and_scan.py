@@ -244,19 +244,23 @@ def scan_masscan(ips: list[str], flags: list[str], outdir: Path, timeout: int) -
 SCANNERS = {"nmap": scan_nmap, "naabu": scan_naabu, "masscan": scan_masscan}
 
 # Preset di flag per scanner e profilo.
+# -Pn su nmap: disabilita l'host discovery (il ping preliminare) e tratta ogni
+# IP come "up". Senza questo flag, un host che blocca ICMP (comunissimo per
+# server web dietro firewall) risulta "0 hosts up" e nmap SALTA del tutto il
+# port scan su quell'IP, anche se ha porte aperte e raggiungibili via TCP.
 PROFILES: dict[str, dict[str, list[str]]] = {
     "stealth": {
-        "nmap": ["-T2", "--top-ports", "100"],
+        "nmap": ["-Pn", "-T2", "--top-ports", "100"],
         "naabu": ["-rate", "100", "-top-ports", "100"],
         "masscan": ["--rate", "100", "-p", "1-1000"],
     },
     "normal": {
-        "nmap": ["-T3", "--top-ports", "1000"],
+        "nmap": ["-Pn", "-T3", "--top-ports", "1000"],
         "naabu": ["-top-ports", "1000"],
         "masscan": ["--rate", "1000", "-p", "1-1000"],
     },
     "aggressive": {
-        "nmap": ["-T4", "--top-ports", "1000", "-sV"],
+        "nmap": ["-Pn", "-T4", "--top-ports", "1000", "-sV"],
         "naabu": ["-rate", "1000", "-top-ports", "1000"],
         "masscan": ["--rate", "5000", "-p", "1-65535"],
     },

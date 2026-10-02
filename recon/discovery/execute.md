@@ -44,7 +44,12 @@ invece di invocare il tool sbagliato.
 
 - `stdout` → `URL<TAB>status_code<TAB>| titolo` (pipe-friendly)
 - `live_hosts.txt` → solo gli URL vivi, uno per riga (pronto per il port scan)
-- `live_hosts.json` → dettagli completi: status, titolo, tech, server, flag usate
+- `live_hosts.json` → dettagli completi: status, titolo, tech, server, flag usate, `dead_hosts`
+
+### Host senza risposta
+Un host che non risponde (DNS fallito, connessione rifiutata, timeout) viene
+**segnalato esplicitamente** su stderr e incluso nel campo `dead_hosts` del
+JSON, invece di sparire in silenzio dal risultato.
 
 ---
 
@@ -119,7 +124,7 @@ python3 ../active/resolve_and_scan.py -iL run1/example.com/<ts>/subdomains.txt -
 | `-d, --domain` | — | Host (ripetibile o con virgole) |
 | `-iL, --input-list` | — | File con un host per riga |
 | `-o, --output` | `<radice>/output` | Cartella base (relativa alla radice o assoluta) |
-| `--label` | primo input | Nome sotto-cartella output |
+| `--label` | suffisso di dominio comune (fallback: primo input) | Nome sotto-cartella output |
 | `--prober` | `httpx` | `httpx` \| `builtin` (fallback automatico se httpx assente) |
 | `--profile` | `normal` | `stealth` \| `normal` \| `aggressive` |
 | `--httpx-args` | `""` | Flag grezze appese a httpx |

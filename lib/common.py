@@ -112,6 +112,35 @@ def resolve_output_base(output_arg: str | None) -> Path:
     return p if p.is_absolute() else REPO_ROOT / p
 
 
+def default_label(hosts: list[str]) -> str:
+    """Nome di default per la sotto-cartella di output quando non viene
+    passato --label esplicitamente.
+
+    Usa il piu' lungo suffisso di dominio comune a TUTTI gli host (es. per
+    ["a.staging.netseven.it", "b.prod.netseven.it"] -> "netseven.it"),
+    cosi' piu' run sullo stesso target finiscono nella stessa cartella anche
+    se l'ordine degli host in input cambia. Il primo host come fallback e'
+    fragile e order-dependent: con un file di 26 sottodomini, il default
+    cambiava a seconda di quale finisse per primo nel file.
+
+    Fallback al primo host se non c'e' un suffisso comune di almeno due
+    etichette (es. input misti di domini scorrelati, o soli IP)."""
+    domains = [h for h in hosts if not is_ip(h)]
+    if domains:
+        split = [d.split(".") for d in domains]
+        min_len = min(len(s) for s in split)
+        common: list[str] = []
+        for i in range(1, min_len + 1):
+            labels_at_pos = {s[-i] for s in split}
+            if len(labels_at_pos) == 1:
+                common.insert(0, split[0][-i])
+            else:
+                break
+        if len(common) >= 2:
+            return ".".join(common)
+    return hosts[0]
+
+
 def make_outdir(base: Path, label: str) -> Path:
     """Crea e ritorna <base>/<label>/<timestamp UTC>/."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

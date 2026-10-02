@@ -145,8 +145,13 @@ def scan_nmap(ips: list[str], flags: list[str], outdir: Path, timeout: int) -> d
     return parse_nmap_xml(xml_path)
 
 
-def parse_nmap_xml(xml_path: Path) -> dict[str, list[dict]]:
-    results: dict[str, list[dict]] = {}
+def parse_nmap_xml(xml_path: Path) -> dict[str, dict]:
+    """Ritorna {ip: {"ports": [...], "ptr": str|None}}.
+
+    Il PTR (reverse DNS, es. 'clients.your-server.de' = Hetzner,
+    'bc.googleusercontent.com' = GCP) e' spesso un buon indizio sul
+    provider di hosting, quindi lo conserviamo invece di scartarlo."""
+    results: dict[str, dict] = {}
     try:
         tree = ET.parse(xml_path)
     except ET.ParseError as e:
@@ -160,6 +165,10 @@ def parse_nmap_xml(xml_path: Path) -> dict[str, list[dict]]:
                 break
         if not addr:
             continue
+        ptr = None
+        hn = host.find("./hostnames/hostname[@type='PTR']")
+        if hn is not None:
+            ptr = hn.get("name")
         ports: list[dict] = []
         for p in host.findall("./ports/port"):
             state = p.find("state")
@@ -174,11 +183,11 @@ def parse_nmap_xml(xml_path: Path) -> dict[str, list[dict]]:
                 "product": (svc.get("product") if svc is not None else None),
                 "version": (svc.get("version") if svc is not None else None),
             })
-        results[addr] = sorted(ports, key=lambda x: x["port"])
+        results[addr] = {"ports": sorted(ports, key=lambda x: x["port"]), "ptr": ptr}
     return results
 
 
-def scan_naabu(ips: list[str], flags: list[str], outdir: Path, timeout: int) -> dict[str, list[dict]]:
+def scan_naabu(ips: list[str], flags: list[str], outdir: Path, timeout: int) -> dict[str, dict]:
     if not shutil.which("naabu"):
         warn("naabu non installato, salto lo scan.")
         return {}
@@ -186,7 +195,7 @@ def scan_naabu(ips: list[str], flags: list[str], outdir: Path, timeout: int) -> 
     log(f"naabu: {' '.join(cmd)} (host via stdin)")
     rc, out, err = run_cmd(cmd, timeout, input_text="\n".join(ips))
     (outdir / "naabu.jsonl").write_text(out, encoding="utf-8")
-    results: dict[str, list[dict]] = {}
+    ports_by_ip: dict[str, list[dict]] = {}
     for line in out.splitlines():
         try:
             obj = json.loads(line)
@@ -195,16 +204,18 @@ def scan_naabu(ips: list[str], flags: list[str], outdir: Path, timeout: int) -> 
         ip = obj.get("ip") or obj.get("host")
         port = obj.get("port")
         if ip and port:
-            results.setdefault(ip, []).append(
+            ports_by_ip.setdefault(ip, []).append(
                 {"port": int(port), "proto": "tcp", "state": "open",
                  "service": None, "product": None, "version": None}
             )
-    for ip in results:
-        results[ip].sort(key=lambda x: x["port"])
+    results: dict[str, dict] = {}
+    for ip, ports in ports_by_ip.items():
+        ports.sort(key=lambda x: x["port"])
+        results[ip] = {"ports": ports, "ptr": None}  # naabu non fornisce il PTR
     return results
 
 
-def scan_masscan(ips: list[str], flags: list[str], outdir: Path, timeout: int) -> dict[str, list[dict]]:
+def scan_masscan(ips: list[str], flags: list[str], outdir: Path, timeout: int) -> dict[str, dict]:
     if not shutil.which("masscan"):
         warn("masscan non installato, salto lo scan.")
         return {}
@@ -214,9 +225,9 @@ def scan_masscan(ips: list[str], flags: list[str], outdir: Path, timeout: int) -
     rc, out, err = run_cmd(cmd, timeout)
     if err.strip():
         warn(f"masscan stderr: {err.strip()[:200]}")
-    results: dict[str, list[dict]] = {}
+    ports_by_ip: dict[str, list[dict]] = {}
     if not json_path.exists():
-        return results
+        return {}
     try:
         data = json.loads(json_path.read_text(encoding="utf-8") or "[]")
     except json.JSONDecodeError:
@@ -226,18 +237,20 @@ def scan_masscan(ips: list[str], flags: list[str], outdir: Path, timeout: int) -
             data = json.loads("[" + raw + "]") if not raw.startswith("[") else json.loads(raw)
         except json.JSONDecodeError as e:
             warn(f"parsing masscan JSON: {e}")
-            return results
+            return {}
     for entry in data:
         ip = entry.get("ip")
         for pr in entry.get("ports", []):
             if ip and pr.get("port"):
-                results.setdefault(ip, []).append(
+                ports_by_ip.setdefault(ip, []).append(
                     {"port": int(pr["port"]), "proto": pr.get("proto", "tcp"),
                      "state": pr.get("status", "open"),
                      "service": None, "product": None, "version": None}
                 )
-    for ip in results:
-        results[ip].sort(key=lambda x: x["port"])
+    results: dict[str, dict] = {}
+    for ip, ports in ports_by_ip.items():
+        ports.sort(key=lambda x: x["port"])
+        results[ip] = {"ports": ports, "ptr": None}  # masscan non fornisce il PTR
     return results
 
 
@@ -357,6 +370,14 @@ def main() -> int:
         for ip in ips:
             ip_to_hosts.setdefault(ip, set()).add(host)
     unique_ips = sorted(ip_to_hosts)
+
+    # Input che non hanno prodotto nemmeno un IP (NXDOMAIN, nessun record
+    # A/AAAA, timeout DNS...). Senza questo controllo sparivano in silenzio
+    # dal risultato finale, senza nessun avviso.
+    unresolved = sorted(h for h in inputs if not resolution.get(h))
+    if unresolved:
+        warn(f"Non risolti ({len(unresolved)}/{len(inputs)}): {', '.join(unresolved)}")
+
     log(f"IP unici risolti: {len(unique_ips)}")
     if not unique_ips:
         warn("Nessun IP risolto, niente da scansionare.")
@@ -364,7 +385,7 @@ def main() -> int:
 
     # --- Output dir ---
     base = common.resolve_output_base(args.output)
-    label = args.label or inputs[0]
+    label = args.label or common.default_label(inputs)
     outdir = common.make_outdir(base, label)
 
     # --- Fase 2: scan ---
@@ -373,10 +394,12 @@ def main() -> int:
     # --- Assemble ---
     hosts_out = []
     for ip in unique_ips:
+        entry = port_results.get(ip, {})
         hosts_out.append({
             "ip": ip,
+            "ptr": entry.get("ptr"),
             "domains": sorted(ip_to_hosts.get(ip, set())),
-            "ports": port_results.get(ip, []),
+            "ports": entry.get("ports", []),
         })
     total_open = sum(len(h["ports"]) for h in hosts_out)
 
@@ -388,6 +411,7 @@ def main() -> int:
         "effective_flags": {args.scanner: flags},
         "inputs": inputs,
         "resolution": {h: sorted(ips) for h, ips in resolution.items()},
+        "unresolved": unresolved,
         "unique_ips": unique_ips,
         "total_open_ports": total_open,
         "hosts": hosts_out,

@@ -58,11 +58,20 @@ nmap direttamente.
 - `stderr` → log
 - `results.json` → risoluzione completa, IP unici, porte aperte con servizio/versione (nmap), flag usate
 
+### Domini non risolti
+Se un host non ha record A/AAAA (NXDOMAIN, nessun record, timeout DNS...),
+viene **segnalato esplicitamente** — sia come warning su stderr sia nel
+campo `unresolved` di `results.json` — invece di sparire in silenzio dal
+risultato. Utile per capire perche' il numero di IP/domini nell'output e'
+inferiore al numero di input.
+
 ### Cartella output (`-o`)
 - Default `<radice repo>/output`
 - Path **relativo** → risolto dalla radice del repo
 - Path **assoluto** → usato così com'è
-- `--label` → nome della sotto-cartella (default: primo input)
+- `--label` → nome della sotto-cartella (default: suffisso di dominio comune
+  a tutti gli input, es. `netseven.it` per una lista di sottodomini misti di
+  quell'apex; se non c'e' un suffisso comune, il primo input)
 
 ---
 
@@ -151,7 +160,7 @@ python3 resolve_and_scan.py -d example.com -o results --label target-A
 | `-d, --domain` | — | Dominio/IP (ripetibile o con virgole) |
 | `-iL, --input-list` | — | File con un host per riga |
 | `-o, --output` | `<radice>/output` | Cartella base (relativa alla radice o assoluta) |
-| `--label` | primo input | Nome sotto-cartella output |
+| `--label` | suffisso di dominio comune (fallback: primo input) | Nome sotto-cartella output |
 | `--resolver` | `builtin` | `builtin` \| `dnsx` |
 | `--scanner` | `nmap` | `nmap` \| `naabu` \| `masscan` |
 | `--profile` | `normal` | `stealth` \| `normal` \| `aggressive` |

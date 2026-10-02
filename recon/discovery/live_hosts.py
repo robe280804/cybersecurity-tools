@@ -270,8 +270,16 @@ def main() -> int:
 
     live.sort(key=lambda r: (r.get("host") or "", r.get("url") or ""))
 
+    # Input senza nessuna risposta viva (DNS fallito, connessione rifiutata,
+    # timeout...). Elencarli esplicitamente evita che spariscano in silenzio
+    # dal risultato finale.
+    live_hosts_set = {r["host"] for r in live if r.get("host")}
+    dead = sorted(h for h in inputs if h not in live_hosts_set)
+    if dead:
+        common.warn(f"Nessuna risposta ({len(dead)}/{len(inputs)}): {', '.join(dead)}")
+
     base = common.resolve_output_base(args.output)
-    label = args.label or inputs[0]
+    label = args.label or common.default_label(inputs)
     outdir = common.make_outdir(base, label)
 
     txt_path = outdir / "live_hosts.txt"
@@ -289,6 +297,7 @@ def main() -> int:
         "inputs": inputs,
         "total_inputs": len(inputs),
         "total_live": len(live),
+        "dead_hosts": dead,
         "live_hosts": live,
     }
     json_path.write_text(json.dumps(result, indent=2), encoding="utf-8")

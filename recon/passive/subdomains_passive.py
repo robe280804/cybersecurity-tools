@@ -31,33 +31,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
-import shlex
 import shutil
-import subprocess
 import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from lib import common  # noqa: E402
+
 # ---------------------------------------------------------------------------
-# Helpers
+# Sorgenti
 # ---------------------------------------------------------------------------
-
-DOMAIN_RE = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})+$")
-
-
-def log(msg: str) -> None:
-    print(f"[*] {msg}", file=sys.stderr)
-
-
-def warn(msg: str) -> None:
-    print(f"[!] {msg}", file=sys.stderr)
-
-
-def valid_domain(d: str) -> bool:
-    return bool(DOMAIN_RE.match(d))
 
 
 def normalize(host: str, root: str) -> str | None:
@@ -67,35 +52,8 @@ def normalize(host: str, root: str) -> str | None:
     if not host or "@" in host or " " in host:
         return None
     if host == root or host.endswith("." + root):
-        return host if valid_domain(host) else None
+        return host if common.valid_domain(host) else None
     return None
-
-
-def run_cmd(cmd: list[str], timeout: int) -> list[str]:
-    """Esegue un tool esterno e ritorna le righe di stdout (vuoto se fallisce)."""
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        if proc.returncode != 0 and not proc.stdout:
-            warn(f"{cmd[0]} rc={proc.returncode}: {proc.stderr.strip()[:200]}")
-        return proc.stdout.splitlines()
-    except FileNotFoundError:
-        warn(f"{cmd[0]} non trovato nel PATH, salto.")
-    except subprocess.TimeoutExpired:
-        warn(f"{cmd[0]} timeout dopo {timeout}s.")
-    except Exception as e:  # noqa: BLE001
-        warn(f"{cmd[0]} errore: {e}")
-    return []
-
-
-# ---------------------------------------------------------------------------
-# Sorgenti
-# ---------------------------------------------------------------------------
 
 
 def source_crtsh(domain: str, timeout: int, extra: list[str]) -> set[str]:
@@ -107,7 +65,7 @@ def source_crtsh(domain: str, timeout: int, extra: list[str]) -> set[str]:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))
     except Exception as e:  # noqa: BLE001
-        warn(f"crt.sh errore: {e}")
+        common.warn(f"crt.sh errore: {e}")
         return found
     for entry in data:
         for field in ("name_value", "common_name"):
@@ -121,29 +79,29 @@ def source_crtsh(domain: str, timeout: int, extra: list[str]) -> set[str]:
 
 def source_subfinder(domain: str, timeout: int, extra: list[str]) -> set[str]:
     if not shutil.which("subfinder"):
-        warn("subfinder non installato, salto.")
+        common.warn("subfinder non installato, salto.")
         return set()
     cmd = ["subfinder", "-silent", "-d", domain] + extra
-    lines = run_cmd(cmd, timeout)
+    lines = common.run_cmd_lines(cmd, timeout)
     return {h for line in lines if (h := normalize(line, domain))}
 
 
 def source_assetfinder(domain: str, timeout: int, extra: list[str]) -> set[str]:
     if not shutil.which("assetfinder"):
-        warn("assetfinder non installato, salto.")
+        common.warn("assetfinder non installato, salto.")
         return set()
     # assetfinder vuole il dominio come ultimo argomento posizionale.
     cmd = ["assetfinder", "--subs-only"] + extra + [domain]
-    lines = run_cmd(cmd, timeout)
+    lines = common.run_cmd_lines(cmd, timeout)
     return {h for line in lines if (h := normalize(line, domain))}
 
 
 def source_amass(domain: str, timeout: int, extra: list[str]) -> set[str]:
     if not shutil.which("amass"):
-        warn("amass non installato, salto.")
+        common.warn("amass non installato, salto.")
         return set()
     cmd = ["amass", "enum", "-passive", "-d", domain] + extra
-    lines = run_cmd(cmd, timeout)
+    lines = common.run_cmd_lines(cmd, timeout)
     return {h for line in lines if (h := normalize(line, domain))}
 
 
@@ -211,8 +169,8 @@ def main() -> int:
     args = parser.parse_args()
 
     domain = args.domain.strip().lower().rstrip(".")
-    if not valid_domain(domain):
-        warn(f"Dominio non valido: {domain!r}")
+    if not common.valid_domain(domain):
+        common.warn(f"Dominio non valido: {domain!r}")
         return 2
 
     # Selezione sorgenti
@@ -220,46 +178,35 @@ def main() -> int:
         chosen = [s.strip() for s in args.only.split(",") if s.strip()]
         unknown = [s for s in chosen if s not in SOURCES]
         if unknown:
-            warn(f"Sorgenti sconosciute: {unknown}. Disponibili: {list(SOURCES)}")
+            common.warn(f"Sorgenti sconosciute: {unknown}. Disponibili: {list(SOURCES)}")
             return 2
     else:
         chosen = list(SOURCES)
 
-    # Passthrough flag utente (splittate in modo sicuro, niente shell).
+    # Flag effettive per tool = preset del profilo + passthrough utente.
+    # crtsh non ha flag (ignora extra), ma deve comunque comparire nel dict.
+    raw_args_by_tool = {
+        "subfinder": args.subfinder_args,
+        "amass": args.amass_args,
+        "assetfinder": args.assetfinder_args,
+    }
     try:
-        user_extra = {
-            "subfinder": shlex.split(args.subfinder_args),
-            "amass": shlex.split(args.amass_args),
-            "assetfinder": shlex.split(args.assetfinder_args),
+        extra_for = {
+            name: common.effective_flags(PROFILES, args.profile, name, raw_args_by_tool.get(name, ""))
+            for name in chosen
         }
     except ValueError as e:
-        warn(f"Errore nel parsing delle flag passthrough: {e}")
+        common.warn(f"Errore nel parsing delle flag passthrough: {e}")
         return 2
 
-    # Flag effettive per tool = preset del profilo + passthrough utente.
-    profile_flags = PROFILES[args.profile]
-    extra_for = {
-        name: profile_flags.get(name, []) + user_extra.get(name, [])
-        for name in chosen
-    }
-
-    log(f"Target: {domain}  |  Profilo: {args.profile}  |  Sorgenti: {chosen}")
+    common.log(f"Target: {domain}  |  Profilo: {args.profile}  |  Sorgenti: {chosen}")
     for name in chosen:
         if extra_for[name]:
-            log(f"  {name} flag: {' '.join(extra_for[name])}")
+            common.log(f"  {name} flag: {' '.join(extra_for[name])}")
 
     # Output: <base>/<dominio>/<timestamp>/
-    # base di default = <radice repo>/output; un path relativo passato con -o
-    # viene risolto dalla radice del repo, uno assoluto resta tale.
-    repo_root = Path(__file__).resolve().parents[2]
-    if args.output:
-        out_arg = Path(args.output)
-        base = out_arg if out_arg.is_absolute() else repo_root / out_arg
-    else:
-        base = repo_root / "output"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    outdir = base / domain / stamp
-    outdir.mkdir(parents=True, exist_ok=True)
+    base = common.resolve_output_base(args.output)
+    outdir = common.make_outdir(base, domain)
 
     # Esecuzione parallela delle sorgenti
     per_source: dict[str, set[str]] = {}
@@ -274,11 +221,11 @@ def main() -> int:
             try:
                 hosts = fut.result()
             except Exception as e:  # noqa: BLE001
-                warn(f"{name} eccezione: {e}")
+                common.warn(f"{name} eccezione: {e}")
                 hosts = set()
             per_source[name] = hosts
             all_hosts |= hosts
-            log(f"{name}: {len(hosts)} sottodomini")
+            common.log(f"{name}: {len(hosts)} sottodomini")
 
     sorted_hosts = sorted(all_hosts)
 
@@ -289,7 +236,7 @@ def main() -> int:
     json_path = outdir / "subdomains.json"
     result = {
         "domain": domain,
-        "generated_utc": datetime.now(timezone.utc).isoformat(),
+        "generated_utc": common.now_iso(),
         "profile": args.profile,
         "sources": chosen,
         "effective_flags": {name: extra_for[name] for name in chosen},
@@ -299,9 +246,9 @@ def main() -> int:
     }
     json_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
-    log(f"Totale unici: {len(sorted_hosts)}")
-    log(f"Salvato: {txt_path}")
-    log(f"Salvato: {json_path}")
+    common.log(f"Totale unici: {len(sorted_hosts)}")
+    common.log(f"Salvato: {txt_path}")
+    common.log(f"Salvato: {json_path}")
 
     if args.json:
         print(json.dumps(result, indent=2))

@@ -90,6 +90,29 @@ def run_cmd(cmd: list[str], timeout: int, input_text: str | None = None) -> tupl
     return 1, "", ""
 
 
+def run_cmd_ext(cmd: list[str], timeout: int, input_text: str | None = None) -> tuple[int, str, str, bool]:
+    """Come run_cmd, ma il quarto valore dice esplicitamente se il comando e'
+    andato in timeout (a differenza di un fallimento qualsiasi). Utile
+    quando il chiamante deve reagire diversamente a un timeout — es. avvisare
+    che una scansione con wordlist e' stata troncata e il risultato e'
+    parziale, non un semplice 'zero risultati'."""
+    try:
+        proc = subprocess.run(
+            cmd, input=input_text, capture_output=True, text=True,
+            timeout=timeout, check=False,
+        )
+        return proc.returncode, proc.stdout, proc.stderr, False
+    except FileNotFoundError:
+        warn(f"{cmd[0]} non trovato nel PATH, salto.")
+        return 1, "", "", False
+    except subprocess.TimeoutExpired:
+        warn(f"{cmd[0]} timeout dopo {timeout}s.")
+        return 1, "", "", True
+    except Exception as e:  # noqa: BLE001
+        warn(f"{cmd[0]} errore: {e}")
+        return 1, "", "", False
+
+
 def run_cmd_lines(cmd: list[str], timeout: int) -> list[str]:
     """Come run_cmd ma ritorna direttamente le righe di stdout."""
     rc, out, err = run_cmd(cmd, timeout)

@@ -42,6 +42,7 @@ import re
 import shutil
 import ssl
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -595,15 +596,86 @@ def _js_refs(body: bytes, js_url: str, root: str) -> set[str]:
     return {_norm(u) for u in out}
 
 
+# jsluice (BishopFox): parsing ad AST invece di regex, risolve concatenazioni
+# e template literal che i regex sopra non vedono. Presenza rilevata una sola
+# volta: se assente si prosegue solo con i regex, senza warning ripetuti.
+_JSLUICE_BIN = shutil.which("jsluice")
+_JSLUICE_WARNED = False
+
+
+def _jsluice_mine(body: bytes, source: str, acc: "_JsAcc", timeout: int) -> None:
+    """Arricchisce l'estrazione con jsluice se disponibile: e' puramente
+    ADDITIVO rispetto ai regex (che restano baseline/fallback). Il formato
+    esatto dell'output puo' variare tra versioni di jsluice, quindi il
+    parsing e' deliberatamente permissivo e non deve mai interrompere la
+    scansione: qualunque problema (binario assente, JSON inatteso, timeout)
+    viene inghiottito con un singolo warning."""
+    global _JSLUICE_WARNED
+    if not _JSLUICE_BIN:
+        return
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".js", delete=False) as f:
+            f.write(body)
+            tmp_path = f.name
+        for sub, handler in (("urls", _jsluice_handle_url), ("secrets", _jsluice_handle_secret)):
+            rc, out, err = common.run_cmd([_JSLUICE_BIN, sub, tmp_path], timeout)
+            for line in out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict):
+                    handler(obj, acc, source)
+    except Exception as e:  # noqa: BLE001
+        if not _JSLUICE_WARNED:
+            common.warn(f"jsluice: analisi non riuscita ({e}), continuo con i soli regex "
+                        f"(nessun altro warning jsluice in questa run).")
+            _JSLUICE_WARNED = True
+    finally:
+        if tmp_path:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _jsluice_handle_url(obj: dict, acc: "_JsAcc", source: str) -> None:
+    u = obj.get("url") or obj.get("path") or obj.get("endpoint")
+    if not isinstance(u, str) or not u:
+        return
+    if u.startswith(("http://", "https://")):
+        acc.urls.add(u)
+    elif u.startswith("/") and not STATIC_EXT_RE.search(u):
+        acc._mark(u, "call")  # jsluice risolve concatenazioni: trattata come "call".
+
+
+def _jsluice_handle_secret(obj: dict, acc: "_JsAcc", source: str) -> None:
+    kind = obj.get("kind") or obj.get("type") or "secret"
+    data = obj.get("data") if isinstance(obj.get("data"), dict) else obj
+    val = next((data[k] for k in ("value", "match", "secret", "raw") if isinstance(data.get(k), str)), None)
+    if not val:
+        return
+    key = (f"jsluice:{kind}", val)
+    if key in acc._seen_secret:
+        return
+    acc._seen_secret.add(key)
+    acc.secrets.append({"type": f"jsluice: {kind}", "match": _mask(val), "source": source})
+
+
 class _JsAcc:
     """Accumulatore dei risultati del mining (usato solo dal thread principale:
     i worker fanno solo I/O di rete, quindi niente lock)."""
 
-    def __init__(self) -> None:
+    def __init__(self, timeout: int = 15) -> None:
         self.endpoint_via: dict[str, str] = {}
         self.urls: set[str] = set()
         self.secrets: list[dict] = []
         self._seen_secret: set[tuple[str, str]] = set()
+        self._timeout = timeout
 
     def _mark(self, path: str, via: str) -> None:
         # "call" (fetch/axios/..., piu' affidabile) ha priorita' su "path".
@@ -633,12 +705,86 @@ class _JsAcc:
                     continue
                 self._seen_secret.add((name, val))
                 self.secrets.append({"type": name, "match": _mask(val), "source": source})
+        _jsluice_mine(body, source, self, self._timeout)
+
+
+def _render_pages_playwright(pages: list[str], timeout: int, insecure: bool,
+                             headers: dict[str, str] | None, base_host: str) -> dict:
+    """Rende le pagine con un browser headless (Chromium via Playwright) e
+    intercetta il traffico di rete REALE: cattura le chiamate XHR/fetch
+    effettive e gli script iniettati a runtime che un crawler statico non
+    vede (SPA, route client-side, chunk caricati solo dopo un'interazione).
+    Opt-in esplicito (--render playwright): richiede `pip install playwright`
+    + `playwright install chromium`, assente di default.
+
+    Ritorna {endpoints[{endpoint,via}], urls[], js_bodies[{url,body,source}]}.
+    Fallisce in modo silenzioso (liste vuote, con warning) se il pacchetto o
+    il browser non sono disponibili: non deve mai interrompere la scansione."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        common.warn("--render playwright richiesto ma il pacchetto 'playwright' non e' "
+                    "installato (pip install playwright && playwright install chromium). "
+                    "Rendering saltato, proseguo coi soli risultati statici.")
+        return {"endpoints": [], "urls": [], "js_bodies": []}
+
+    endpoints: dict[str, str] = {}
+    urls: set[str] = set()
+    js_bodies: list[dict] = []
+    seen_req: set[str] = set()
+
+    def on_response(resp, page_url: str) -> None:
+        try:
+            u = resp.url
+            if u in seen_req:
+                return
+            seen_req.add(u)
+            rtype = resp.request.resource_type
+            if rtype in ("xhr", "fetch"):
+                if _in_scope(u, base_host):
+                    path = urllib.parse.urlparse(u).path or "/"
+                    endpoints.setdefault(path, "render")
+                elif u.startswith(("http://", "https://")):
+                    urls.add(u)
+            elif rtype == "script" and resp.status < 400 and _in_scope(u, base_host):
+                body = resp.body()
+                if body:
+                    js_bodies.append({"url": u, "body": body, "source": f"{page_url} (rendered)"})
+        except Exception:  # noqa: BLE001
+            pass  # risposta chiusa/non accessibile: non deve far cadere il rendering
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(
+                    ignore_https_errors=insecure,
+                    extra_http_headers=headers or {},
+                    user_agent="recon-web-enum/1.0 (+playwright)",
+                )
+                for page_url in pages:
+                    page = context.new_page()
+                    page.on("response", lambda r, _u=page_url: on_response(r, _u))
+                    try:
+                        page.goto(page_url, wait_until="networkidle", timeout=timeout * 1000)
+                    except Exception as e:  # noqa: BLE001
+                        common.warn(f"{page_url}: rendering playwright non riuscito ({e}), continuo.")
+                    finally:
+                        page.close()
+            finally:
+                browser.close()
+    except Exception as e:  # noqa: BLE001
+        common.warn(f"playwright: errore durante il rendering ({e}), proseguo senza.")
+
+    return {"endpoints": [{"endpoint": e, "via": v} for e, v in endpoints.items()],
+            "urls": sorted(urls), "js_bodies": js_bodies}
 
 
 def mine_js(url: str, timeout: int, insecure: bool, concurrency: int = 8,
             crawl_depth: int = 2, max_pages: int = 60, max_js_files: int = 200,
             max_js_bytes: int = 3_000_000, seeds: list[str] | None = None,
-            headers: dict[str, str] | None = None, min_interval: float = 0.0) -> dict:
+            headers: dict[str, str] | None = None, min_interval: float = 0.0,
+            render: bool = False, max_render_pages: int = 10) -> dict:
     """Crawl ricorsivo + mining dei JS. Ritorna {endpoints, urls, secrets,
     js_files, sourcemaps, sources, pages}.
 
@@ -650,7 +796,7 @@ def mine_js(url: str, timeout: int, insecure: bool, concurrency: int = 8,
        altri host (CDN/terze parti) vengono elencati ma non scaricati.
     3. Source map: se un bundle ne dichiara una (sourceMappingURL) viene scaricata
        e se ne analizzano i sorgenti originali (sourcesContent)."""
-    acc = _JsAcc()
+    acc = _JsAcc(timeout)
     base_host = urllib.parse.urlparse(url).hostname or ""
     root = url.rstrip("/") + "/"
     js_found: dict[str, dict] = {}
@@ -753,6 +899,22 @@ def mine_js(url: str, timeout: int, insecure: bool, concurrency: int = 8,
                     if i < len(contents) and isinstance(contents[i], str):
                         acc.mine(contents[i].encode("utf-8", "replace"), f"{mu} :: {name}")
 
+    rendered = 0
+    if render:
+        render_pages = list(dict.fromkeys([url] + list(seeds or [])))[:max_render_pages]
+        common.log(f"{url}: rendering {len(render_pages)} pagine con playwright...")
+        rr = _render_pages_playwright(render_pages, timeout, insecure, headers, base_host)
+        for e in rr["endpoints"]:
+            acc._mark(e["endpoint"], e["via"])
+        acc.urls.update(rr["urls"])
+        for jb in rr["js_bodies"]:
+            ju = _norm(jb["url"])
+            if ju not in js_found:
+                js_found[ju] = {"url": ju, "found_in": jb["source"], "in_scope": True}
+            js_found[ju].update(status=200, bytes=len(jb["body"]), rendered=True)
+            acc.mine(jb["body"], jb["source"])
+            rendered += 1
+
     return {
         "endpoints": [{"endpoint": e, "via": acc.endpoint_via[e]} for e in sorted(acc.endpoint_via)][:500],
         "urls": sorted(acc.urls)[:300],
@@ -761,6 +923,7 @@ def mine_js(url: str, timeout: int, insecure: bool, concurrency: int = 8,
         "sourcemaps": sourcemaps,
         "sources": sorted(sources)[:300],
         "pages": pages_ok,
+        "rendered_js": rendered,
     }
 
 
@@ -844,7 +1007,7 @@ def collect_inputs(domains: list[str], input_list: str | None) -> list[str]:
 
 
 EMPTY_JS = {"endpoints": [], "urls": [], "secrets": [], "js_files": [],
-            "sourcemaps": [], "sources": [], "pages": 0}
+            "sourcemaps": [], "sources": [], "pages": 0, "rendered_js": 0}
 
 
 def enum_one(entry: str, args, flags_whatweb: list[str], flags_ffuf: list[str],
@@ -895,7 +1058,7 @@ def enum_one(entry: str, args, flags_whatweb: list[str], flags_ffuf: list[str],
         seeds = [f"{url}/{p['path']}" for p in paths if p["status"] == 200][:30]
         js = mine_js(url, args.timeout, args.insecure, eff_profile["js_concurrency"],
                      args.crawl_depth, args.max_pages, args.max_js, args.max_js_bytes, seeds,
-                     extra_headers, min_interval)
+                     extra_headers, min_interval, args.render == "playwright", args.max_render_pages)
 
     return {"input": entry, "url": url, "tech": tech, "waf": waf, "paths": paths, "js": js}
 
@@ -922,7 +1085,8 @@ def render_text(results: list[dict]) -> str:
         if js["js_files"]:
             fetched = [f for f in js["js_files"] if f.get("bytes") is not None]
             ext = [f for f in js["js_files"] if not f["in_scope"]]
-            lines.append(f"  JS: {len(js['js_files'])} trovati ({len(fetched)} analizzati, "
+            render_note = f", {js['rendered_js']} via rendering" if js.get("rendered_js") else ""
+            lines.append(f"  JS: {len(js['js_files'])} trovati ({len(fetched)} analizzati{render_note}, "
                          f"{len(ext)} esterni non scaricati) da {js['pages']} pagine crawlate")
             for f in js["js_files"][:60]:
                 tag = "" if f["in_scope"] else "  [esterno]"
@@ -930,6 +1094,8 @@ def render_text(results: list[dict]) -> str:
                     tag += "  [source map]"
                 if f.get("truncated"):
                     tag += "  [troncato]"
+                if f.get("rendered"):
+                    tag += "  [solo via rendering]"
                 lines.append(f"    {f['url']}{tag}")
             if len(js["js_files"]) > 60:
                 lines.append(f"    ... e altri {len(js['js_files']) - 60} (vedi web_enum.json)")
@@ -993,6 +1159,14 @@ def main() -> int:
                         help="Max file JS scaricati per host, chunk inclusi (default 200)")
     parser.add_argument("--max-js-bytes", type=int, default=3_000_000,
                         help="Max byte letti per singolo JS/source map (default 3MB)")
+    parser.add_argument("--render", choices=["off", "playwright"], default="off",
+                        help="Rendering con browser headless (Chromium via Playwright) per catturare "
+                             "script iniettati a runtime e le chiamate XHR/fetch reali che il crawler "
+                             "statico non vede. Opt-in: richiede 'pip install playwright && "
+                             "playwright install chromium'. Default off (nessun browser lanciato).")
+    parser.add_argument("--max-render-pages", type=int, default=10,
+                        help="Max pagine renderizzate per host con --render playwright (default 10, "
+                             "costoso: un browser headless per pagina)")
     parser.add_argument("--whatweb-args", default="", help="Flag grezze appese a whatweb")
     parser.add_argument("--ffuf-args", default="", help="Flag grezze appese a ffuf")
     parser.add_argument("--gobuster-args", default="", help="Flag grezze appese a gobuster")

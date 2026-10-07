@@ -43,10 +43,43 @@ eludere i suoi controlli di sicurezza:
 |---|---|---|
 | Stack | `whatweb` | Firma su header/body per CMS/framework comuni (WordPress, Laravel, Django, React, ...) |
 | Route discovery | `ffuf` **o** `gobuster` + wordlist di sistema (`dirb`/SecLists se presenti) | Wordlist minima integrata (~30 path comuni) |
-| Endpoint/secret da JS | *(nessuno, sempre puro Python)* | Crawl ricorsivo concorrente: pagine HTML (`--crawl-depth`, `--max-pages`) -> `<script>`/preload/JS inline -> chunk dinamici (`import()`, mappe webpack, Vite/Next) fino a `--max-js`; scarica anche le source map (`sourceMappingURL`) e ne analizza i sorgenti originali. Regex su path-like, URL assolute, chiamate `fetch`/`axios` e secret. In scope host e sottodomini; JS su altri host elencati ma non scaricati |
+| Endpoint/secret da JS | `jsluice` (parsing AST, additivo) + `playwright`/Chromium (`--render playwright`, opt-in) | Crawl ricorsivo concorrente: pagine HTML (`--crawl-depth`, `--max-pages`) -> `<script>`/preload/JS inline -> chunk dinamici (`import()`, mappe webpack, Vite/Next) fino a `--max-js`; scarica anche le source map (`sourceMappingURL`) e ne analizza i sorgenti originali. Regex su path-like, URL assolute, chiamate `fetch`/`axios` e secret. In scope host e sottodomini; JS su altri host elencati ma non scaricati |
 
 Un tool esterno mancante viene **rilevato e sostituito dal fallback**, non
 blocca lo script (stesso principio di `crtsh` per `subdomain-enum`).
+
+### jsluice (parsing AST, opzionale e additivo)
+
+Se il binario [`jsluice`](https://github.com/BishopFox/jsluice) e' nel `PATH`,
+ogni file JS analizzato (bundle, chunk, sorgente da source map, script
+inline) viene passato anche a `jsluice urls`/`jsluice secrets`. Risolve
+concatenazioni e template literal che i regex sopra non vedono (es.
+`base + "/users/" + id`). E' **puramente additivo**: i regex restano
+comunque la baseline, jsluice aggiunge solo cio' che trova in piu'. Se
+assente, o se la sua esecuzione fallisce per qualunque motivo, la scansione
+prosegue con i soli regex e un unico warning (non uno per file).
+
+### Rendering con browser headless (`--render playwright`, opt-in)
+
+Il crawl statico non esegue JavaScript: uno `<script>` iniettato a runtime,
+una route client-side non linkata da `<a>`, o un chunk caricato solo dopo
+un'interazione non vengono visti. Con `--render playwright` lo script
+renderizza fino a `--max-render-pages` pagine (default 10) con Chromium
+headless e intercetta il **traffico di rete reale**: le chiamate XHR/fetch
+effettive diventano endpoint (`via: "render"`), gli script scaricati a
+runtime vengono analizzati come gli altri (tag `[solo via rendering]` nel
+`.txt`, `rendered: true` nel JSON).
+
+Richiede l'installazione esplicita (non e' una dipendenza del repo):
+```bash
+pip install playwright
+playwright install chromium
+```
+Se il pacchetto o il browser non sono disponibili, un warning lo segnala e
+la scansione prosegue coi soli risultati statici — non si interrompe mai per
+questo. `--header`/`--cookie` vengono inoltrati anche al contesto del
+browser. Costoso (un browser per pagina): usarlo quando il crawl statico
+sembra trovare meno endpoint di quanti l'applicazione sembri averne.
 
 ### Ricorsione sulle directory (`--recursion-depth N`, default 0 = off)
 
@@ -74,11 +107,16 @@ evita di ri-sondare uno schema gia' noto.
   - per host: `tech[]`, `waf[]` (WAF/CDN rilevati, vuoto se nessuno),
     `paths[{path, status, length, redirect?}]`,
     `js{endpoints[{endpoint, via}], urls[], secrets[{type, match, source}],
-    js_files[{url, found_in, in_scope, status?, bytes?, truncated?, sourcemap?}],
-    sourcemaps[], sources[], pages}`
+    js_files[{url, found_in, in_scope, status?, bytes?, truncated?, sourcemap?, rendered?}],
+    sourcemaps[], sources[], pages, rendered_js}`
   - `paths[].redirect` presente solo per i 3xx (dove punta la `Location`)
-  - `js.endpoints[].via`: `"call"` (da `fetch`/`axios`/..., piu' affidabile)
-    oppure `"path"` (stringa path-like nel bundle)
+  - `js.endpoints[].via`: `"call"` (da `fetch`/`axios`/..., piu' affidabile),
+    `"path"` (stringa path-like nel bundle) oppure `"render"` (chiamata di
+    rete reale catturata con `--render playwright`)
+  - `js.secrets[].type` con prefisso `"jsluice: "` indica un secret trovato
+    da jsluice, non dai regex
+  - `js_files[].rendered: true` indica un JS visto solo tramite rendering
+    (iniettato a runtime, assente nell'HTML statico)
 - `web_enum.txt` — stesso contenuto, leggibile (anche su stdout)
 
 > I secret sono **mascherati** (`AIzaSy...stuv`): restano identificabili e
@@ -159,6 +197,15 @@ python3 web_enum.py -d example.com --profile aggressive --ignore-waf-detection
 *(di default, se viene rilevato un WAF/CDN, il profilo scelto viene riportato
 a `stealth` per non aggravare un servizio protetto — vedi sopra)*
 
+### Rendering con browser headless (SPA, script a runtime)
+```bash
+pip install playwright && playwright install chromium   # una tantum
+python3 web_enum.py -d app.example.com --render playwright --max-render-pages 5
+```
+*(opt-in, costoso: usalo quando sospetti route/chiamate che il crawl statico
+non vede — vedi "jsluice (parsing AST, opzionale e additivo)" sopra per
+l'analisi AST, anch'essa opzionale ma molto piu' leggera)*
+
 ### Piu' host, output JSON su stdout
 ```bash
 python3 web_enum.py -d example.com,api.example.com --json
@@ -184,6 +231,8 @@ python3 web_enum.py -d example.com,api.example.com --json
 | `--max-pages` | `60` | Max pagine HTML crawlate per host |
 | `--max-js` | `200` | Max file JS scaricati per host, chunk inclusi |
 | `--max-js-bytes` | `3000000` | Max byte letti per singolo JS/source map |
+| `--render` | `off` | `off` \| `playwright` — rendering headless per script a runtime e chiamate reali (richiede `pip install playwright && playwright install chromium`) |
+| `--max-render-pages` | `10` | Max pagine renderizzate per host con `--render playwright` |
 | `--whatweb-args` | `""` | Flag grezze appese a whatweb |
 | `--ffuf-args` | `""` | Flag grezze appese a ffuf |
 | `--gobuster-args` | `""` | Flag grezze appese a gobuster |
@@ -218,11 +267,15 @@ con `--wordlist`.
 - Il fallback builtin per il content discovery copre ~30 path: utile come
   rete di sicurezza, non sostituisce `ffuf` + una wordlist seria (SecLists).
 - Il mining JS crawla pagine e chunk dinamici (`import()`, mappe webpack,
-  Vite/Next) fino ai tetti `--crawl-depth`/`--max-pages`/`--max-js`, ma
-  **non esegue JavaScript**: uno `<script>` iniettato a runtime, una route
-  client-side non linkata da `<a>`, o un chunk caricato solo dopo
-  un'interazione utente non vengono visti. Per quello serve un browser
-  headless (fuori scope di questo script).
+  Vite/Next) fino ai tetti `--crawl-depth`/`--max-pages`/`--max-js`, ma di
+  default **non esegue JavaScript**: uno `<script>` iniettato a runtime, una
+  route client-side non linkata da `<a>`, o un chunk caricato solo dopo
+  un'interazione utente non vengono visti dal crawl statico. `--render
+  playwright` colma questo gap (vedi sopra), ma e' opt-in e costoso — non
+  attivo di default.
+- L'analisi con jsluice (vedi sopra) e' **additiva, non sostitutiva**: se
+  jsluice non e' installato (il caso comune, va compilato con Go), si resta
+  sui soli regex — che restano quindi il livello di affidabilita' di base.
 - Non attinge a fonti storiche (Wayback/Common Crawl): un JS rimosso dal
   sito ma ancora indicizzato altrove non viene trovato.
 - I **secret** nei JS sono trovati per **pattern euristici** (chiavi note tipo

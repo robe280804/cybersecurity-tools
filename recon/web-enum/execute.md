@@ -16,13 +16,34 @@ Dati uno o piu' **domini/host (o URL gia' risolti)**, per ognuno rileva:
 > discovery + crawling JS). Usa SOLO su host di tua proprieta' o per cui hai
 > autorizzazione.
 
+## Non alterare il servizio target
+
+Lo script e' pensato per non aggravare un servizio sotto test, non per
+eludere i suoi controlli di sicurezza:
+
+- **Back-off automatico su 429/503**: ogni richiesta (fetch builtin, mining
+  JS) passa da un throttle per-host che rispetta `Retry-After` quando
+  presente, o applica un backoff esponenziale (1s → 30s) altrimenti. Nessun
+  loop aggressivo contro un target che sta chiedendo di rallentare.
+- **Rilevamento WAF/CDN**: prima di qualunque scansione attiva, una singola
+  richiesta leggera controlla le firme di Cloudflare, Akamai, Imperva/
+  Incapsula, Sucuri, AWS WAF/CloudFront, F5 BIG-IP ASM, Fastly, Barracuda,
+  ModSecurity e pagine di blocco generiche. Se trovato, il profilo effettivo
+  viene **riportato a `stealth`** (concorrenza bassa, pausa minima tra
+  richieste) indipendentemente dal `--profile` scelto, con un warning
+  esplicito. `--ignore-waf-detection` forza il profilo scelto — usalo solo
+  se sai cosa stai facendo e hai l'autorizzazione a farlo.
+- Questi meccanismi **non nascondono** le richieste al WAF ne' tentano di
+  aggirarlo: servono solo a non trasformare una scansione autorizzata in un
+  carico che degrada il servizio.
+
 ## I tre motori, uno per task
 
 | Task | Motore esterno | Fallback builtin |
 |---|---|---|
 | Stack | `whatweb` | Firma su header/body per CMS/framework comuni (WordPress, Laravel, Django, React, ...) |
 | Route discovery | `ffuf` **o** `gobuster` + wordlist di sistema (`dirb`/SecLists se presenti) | Wordlist minima integrata (~30 path comuni) |
-| Endpoint/secret da JS | *(nessuno, sempre puro Python)* | Estrae `<script src>` dalla pagina, scarica i JS stesso-origine, regex su path-like, URL assolute, chiamate `fetch`/`axios` e pattern di secret |
+| Endpoint/secret da JS | *(nessuno, sempre puro Python)* | Crawl ricorsivo concorrente: pagine HTML (`--crawl-depth`, `--max-pages`) -> `<script>`/preload/JS inline -> chunk dinamici (`import()`, mappe webpack, Vite/Next) fino a `--max-js`; scarica anche le source map (`sourceMappingURL`) e ne analizza i sorgenti originali. Regex su path-like, URL assolute, chiamate `fetch`/`axios` e secret. In scope host e sottodomini; JS su altri host elencati ma non scaricati |
 
 Un tool esterno mancante viene **rilevato e sostituito dal fallback**, non
 blocca lo script (stesso principio di `crtsh` per `subdomain-enum`).
@@ -48,10 +69,13 @@ evita di ri-sondare uno schema gia' noto.
 ## Output
 
 - `web_enum.json`:
-  - `totals{hosts, hosts_responsive, paths, js_endpoints, js_urls, js_secrets}` —
+  - `totals{hosts, hosts_responsive, hosts_waf, paths, js_files, js_sourcemaps, js_endpoints, js_urls, js_secrets}` —
     conteggi di riepilogo dell'intera run
-  - per host: `tech[]`, `paths[{path, status, length, redirect?}]`,
-    `js{endpoints[{endpoint, via}], urls[], secrets[{type, match, source}]}`
+  - per host: `tech[]`, `waf[]` (WAF/CDN rilevati, vuoto se nessuno),
+    `paths[{path, status, length, redirect?}]`,
+    `js{endpoints[{endpoint, via}], urls[], secrets[{type, match, source}],
+    js_files[{url, found_in, in_scope, status?, bytes?, truncated?, sourcemap?}],
+    sourcemaps[], sources[], pages}`
   - `paths[].redirect` presente solo per i 3xx (dove punta la `Location`)
   - `js.endpoints[].via`: `"call"` (da `fetch`/`axios`/..., piu' affidabile)
     oppure `"path"` (stringa path-like nel bundle)
@@ -120,6 +144,21 @@ python3 web_enum.py -d example.com --routes gobuster --gobuster-args "-s 200,204
 python3 web_enum.py -d internal.example.com --insecure
 ```
 
+### Dietro autenticazione (header custom / cookie di sessione)
+```bash
+python3 web_enum.py -d app.example.com --header "Authorization: Bearer <token>"
+python3 web_enum.py -d app.example.com --cookie "session=abc123; csrftoken=xyz"
+```
+*(ripetibile: `--header "X-Api-Key: ..." --header "X-Tenant: acme"`. Applicato
+a fetch builtin, ffuf e gobuster — non a whatweb.)*
+
+### Forzare il profilo anche con un WAF rilevato
+```bash
+python3 web_enum.py -d example.com --profile aggressive --ignore-waf-detection
+```
+*(di default, se viene rilevato un WAF/CDN, il profilo scelto viene riportato
+a `stealth` per non aggravare un servizio protetto — vedi sopra)*
+
 ### Piu' host, output JSON su stdout
 ```bash
 python3 web_enum.py -d example.com,api.example.com --json
@@ -141,9 +180,16 @@ python3 web_enum.py -d example.com,api.example.com --json
 | `--recursion-depth` | `0` | Profondita' ricorsione sulle dir trovate (0 = off) |
 | `--wordlist` | auto (dirb/SecLists se presenti) | Wordlist custom per il content discovery |
 | `--skip-js` | off | Salta il mining di endpoint/secret dai JS |
+| `--crawl-depth` | `2` | Profondita' del crawl HTML per trovare `<script>` |
+| `--max-pages` | `60` | Max pagine HTML crawlate per host |
+| `--max-js` | `200` | Max file JS scaricati per host, chunk inclusi |
+| `--max-js-bytes` | `3000000` | Max byte letti per singolo JS/source map |
 | `--whatweb-args` | `""` | Flag grezze appese a whatweb |
 | `--ffuf-args` | `""` | Flag grezze appese a ffuf |
 | `--gobuster-args` | `""` | Flag grezze appese a gobuster |
+| `--header` | — | Header custom (ripetibile), es. `"Authorization: Bearer ..."` |
+| `--cookie` | — | Cookie di sessione, es. `"session=abc; csrf=xyz"` |
+| `--ignore-waf-detection` | off | Non riportare il profilo a `stealth` se viene rilevato un WAF/CDN |
 | `--insecure` | off | Non verificare i certificati TLS |
 | `--timeout` | `15` | Timeout per singola richiesta HTTP (resolve, fetch builtin, mining JS) |
 | `--tool-timeout` | `180` | Timeout per l'intera invocazione di ffuf/whatweb — alza questo valore (non `--timeout`) se usi wordlist grandi |
@@ -171,10 +217,14 @@ con `--wordlist`.
 
 - Il fallback builtin per il content discovery copre ~30 path: utile come
   rete di sicurezza, non sostituisce `ffuf` + una wordlist seria (SecLists).
-- Il mining JS guarda solo i file **stesso-origine** referenziati dalla
-  pagina principale (non segue import dinamici/chunk splitting avanzato di
-  bundler moderni) ed e' limitato a 15 file JS per host — e' un primo
-  livello, non un crawler completo.
+- Il mining JS crawla pagine e chunk dinamici (`import()`, mappe webpack,
+  Vite/Next) fino ai tetti `--crawl-depth`/`--max-pages`/`--max-js`, ma
+  **non esegue JavaScript**: uno `<script>` iniettato a runtime, una route
+  client-side non linkata da `<a>`, o un chunk caricato solo dopo
+  un'interazione utente non vengono visti. Per quello serve un browser
+  headless (fuori scope di questo script).
+- Non attinge a fonti storiche (Wayback/Common Crawl): un JS rimosso dal
+  sito ma ancora indicizzato altrove non viene trovato.
 - I **secret** nei JS sono trovati per **pattern euristici** (chiavi note tipo
   AWS/Google/Stripe/JWT + assegnazioni generiche `key/secret/token`): utili come
   segnale, **non sono una garanzia** — vanno verificati a mano e possono

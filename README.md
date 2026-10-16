@@ -121,9 +121,35 @@ python3 recon/web-enum/web_enum.py -iL output/live-host-probe/$D/latest/live_hos
 
 ```bash
 git clone <repo> && cd cybersecurity-tools
-pip install -r requirements.txt   # se presente, solo dipendenze Python
+
+# 1. Dipendenze Python: gli script usano solo la stdlib, non c'e' nulla di
+#    obbligatorio. requirements.txt contiene la sola dipendenza opt-in
+#    (playwright, per `web-enum --render playwright`), commentata.
+pip install -r requirements.txt
+
+# 2. Tool esterni (il vero prerequisito). Vedi quali mancano:
+./install-tools.sh --list
+# Installa i tool della pipeline recon (step 1-6):
+./install-tools.sh
+# Oppure tutto, inclusi gli scanner di docker-configuration e gli opzionali:
+./install-tools.sh --all
 ```
 
-Gli script orchestrano tool esterni gia' presenti su Kali (`subfinder`,
-`amass`, `assetfinder`, `nmap`, `naabu`, `masscan`, `httpx`...). Un tool
-mancante viene saltato con un warning, non blocca l'intera pipeline.
+Gli script **non includono** i tool: li orchestrano se presenti nel PATH.
+Un tool mancante viene saltato con un warning, non blocca l'intera pipeline
+(ma lo step che lo usa rende di meno). L'elenco completo — con categoria e
+metodo di installazione — e' in [`tools.txt`](tools.txt).
+
+Molti tool sono scritti in **Go** (`subfinder`, `httpx`, `dnsx`, `naabu`,
+`assetfinder`, `amass`, `ffuf`, `gobuster`, `jsluice`, `nuclei`...):
+`install-tools.sh` fa da solo il bootstrap di Go via apt se manca, e li
+compila con `go install`. I binari finiscono in `$(go env GOPATH)/bin`
+(default `~/go/bin`): assicurati che sia nel `PATH` —
+`export PATH="$PATH:$(go env GOPATH)/bin"` in `~/.bashrc`/`~/.zshrc`.
+Gli altri arrivano da `apt` (`nmap`, `masscan`, `whatweb`), da release
+binarie (`hadolint`) o da script ufficiali (`trivy`, `grype`). `docker` e
+gli scanner `kics`/`docker-bench-security` (via immagine Docker) restano
+a installazione manuale.
+
+> Lo script e' tarato su Kali/Debian/Ubuntu (`apt`). Su altre distro usa
+> `tools.txt` come lista di riferimento per installare a mano.

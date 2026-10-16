@@ -1,0 +1,5 @@
+# Gli script di shell DEVONO avere terminazioni LF: con CRLF il kernel Linux
+# non trova l'interprete (`#!/usr/bin/env bash\r`) e lo script non parte.
+*.sh    text eol=lf
+*.py    text eol=lf
+tools.txt text eol=lf

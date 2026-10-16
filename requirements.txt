@@ -1,0 +1,18 @@
+# Dipendenze Python del repo.
+#
+# Gli script usano SOLO la standard library: non c'e' nulla di obbligatorio
+# da installare per far girare la pipeline. L'unica dipendenza Python esiste
+# per una funzione opt-in.
+#
+# Playwright: serve esclusivamente a `web-enum` con `--render playwright`
+# (rendering headless Chromium delle pagine prima del mining JS). Non e'
+# richiesto dagli altri step. Dopo l'install del pacchetto serve anche il
+# browser:
+#
+#     pip install -r requirements.txt
+#     playwright install chromium
+#
+# E' commentato perche' scarica un browser (~150 MB): scommenta solo se ti
+# serve il rendering JS.
+#
+# playwright>=1.44

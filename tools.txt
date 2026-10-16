@@ -1,0 +1,51 @@
+# Tool esterni richiesti dagli script (il "requirements.txt" dei binari).
+#
+# Gli script NON includono questi tool: li orchestrano se presenti nel PATH.
+# Un tool mancante viene saltato con un warning, non blocca la pipeline — ma
+# lo step che lo usa produce meno risultati (o nessuno).
+#
+# Installali con:   ./install-tools.sh            (core)
+#                   ./install-tools.sh --all      (core + docker + opzionali)
+#                   ./install-tools.sh --list     (mostra cosa manca)
+#
+# Formato (una riga per tool, campi separati da '|'):
+#   nome | categoria | metodo | spec
+#     categoria: core     -> pipeline recon (step 1-6)
+#                docker   -> solo per recon/docker-configuration
+#                optional -> suggeriti negli execute.md, non orchestrati
+#     metodo:    apt | go | script | manual
+#     spec:      pacchetto apt, module path Go, o nota per manual/script
+
+# --- core: subdomain-enum (step 1, passivo) -------------------------------
+subfinder      | core     | go     | github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+assetfinder    | core     | go     | github.com/tomnomnom/assetfinder@latest
+amass          | core     | go     | github.com/owasp-amass/amass/v4/...@master
+
+# --- core: live-host-probe (step 2) ---------------------------------------
+httpx          | core     | go     | github.com/projectdiscovery/httpx/cmd/httpx@latest
+
+# --- core: port-scan (step 3) ---------------------------------------------
+dnsx           | core     | go     | github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+naabu          | core     | go     | github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+nmap           | core     | apt    | nmap
+masscan        | core     | apt    | masscan
+
+# --- core: web-enum (step 5) ----------------------------------------------
+whatweb        | core     | apt    | whatweb
+ffuf           | core     | go     | github.com/ffuf/ffuf/v2@latest
+gobuster       | core     | go     | github.com/OJ/gobuster/v3@latest
+jsluice        | core     | go     | github.com/BishopFox/jsluice/cmd/jsluice@latest
+
+# --- docker-configuration (audit Docker, interno) -------------------------
+# 'docker' va installato a parte (engine/Desktop); 'docker scout' e' incluso
+# nella CLI recente. Gli scanner sotto sono tutti opzionali: lo script usa
+# quelli che trova.
+hadolint       | docker   | script | release-binary:hadolint/hadolint
+trivy          | docker   | script | aquasecurity-install-script
+grype          | docker   | script | anchore-install-script
+dockle         | docker   | go     | github.com/goodwithtech/dockle/cmd/dockle@latest
+kics           | docker   | manual | immagine docker: checkmarx/kics
+docker-bench-security | docker | manual | immagine docker: docker/docker-bench-security
+
+# --- opzionali: suggeriti negli execute.md, non lanciati dagli script -----
+nuclei         | optional | go     | github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest

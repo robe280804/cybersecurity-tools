@@ -36,6 +36,9 @@ ffuf           | core     | go     | github.com/ffuf/ffuf/v2@latest
 gobuster       | core     | go     | github.com/OJ/gobuster/v3@latest
 jsluice        | core     | go     | github.com/BishopFox/jsluice/cmd/jsluice@latest
 
+# --- core: vuln-scan (step 4) ---------------------------------------------
+nuclei         | core     | go     | github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+
 # --- docker-configuration (audit Docker, interno) -------------------------
 # 'docker' va installato a parte (engine/Desktop); 'docker scout' e' incluso
 # nella CLI recente. Gli scanner sotto sono tutti opzionali: lo script usa
@@ -48,4 +51,3 @@ kics           | docker   | manual | immagine docker: checkmarx/kics
 docker-bench-security | docker | manual | immagine docker: docker/docker-bench-security
 
 # --- opzionali: suggeriti negli execute.md, non lanciati dagli script -----
-nuclei         | optional | go     | github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest

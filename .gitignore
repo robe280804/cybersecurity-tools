@@ -17,3 +17,6 @@ venv/
 .vscode/
 *.swp
 .DS_Store
+
+# Note di lavoro locali
+ROADMAP.md

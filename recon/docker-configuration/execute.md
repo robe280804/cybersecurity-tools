@@ -2,14 +2,18 @@
 
 **Tool:** `docker-configuration` → output sempre in `output/docker-configuration/<label>/<timestamp>/`
 
-Audit delle **misconfigurazioni di sicurezza di uno stack Docker**. A
-differenza degli altri step non guarda il target dall'esterno, ma la sua
-configurazione: i file del progetto e/o i container in esecuzione.
+Audit di sicurezza di uno **stack Docker**: configurazione dei container,
+immagini, daemon e host. A differenza degli altri step non guarda il target
+dall'esterno, ma la sua configurazione: i file del progetto e/o i container
+in esecuzione.
 
-> ⚠️ La modalita' live e' read-only verso il daemon (`docker info`, `ps`,
-> `inspect`), con l'eccezione di `--scan-images` su host remoto, che fa
-> `docker save` per scaricare le immagini. Usa SOLO su host di tua
-> proprieta' o per cui hai autorizzazione.
+> ⚠️ La modalita' live e' read-only verso il daemon (`info`, `version`,
+> `ps`, `inspect`, `top`, `diff`, `network inspect`). Sull'host non viene
+> installato nulla: i check passano come script `sh` su stdin della stessa
+> connessione SSH. Eccezioni: `--scan-images` con scanner solo in locale fa
+> `docker save` per scaricare l'immagine; se docker-bench-security e' gia'
+> sul server viene eseguito con log in una cartella temporanea rimossa a
+> fine run. Usa SOLO su host di tua proprieta' o per cui hai autorizzazione.
 
 ## Due modalita': file o container in esecuzione?
 
@@ -17,7 +21,7 @@ configurazione: i file del progetto e/o i container in esecuzione.
 |---|---|---|
 | Input | cartella/file con `Dockerfile`, `docker-compose*.yml`, `compose*.yaml` | il daemon Docker (locale o remoto via SSH) |
 | Cosa vede | l'**intenzione**: cosa c'e' scritto nei file | la configurazione **effettiva**: cosa sta girando davvero |
-| Trova anche | problemi nei Dockerfile (USER, secret nei layer, ADD da URL) | `docker run` manuali, override non versionati, drift dal repo, opzioni del daemon |
+| Trova anche | problemi nei Dockerfile (USER, secret nei layer, curl \| sh, ADD da URL) | `docker run` manuali, override non versionati, drift dal repo, processi e file sospetti, daemon e host |
 | Serve accesso al server | no (basta il repo) | si': utente nel gruppo `docker` (equivale a root!) |
 
 **Conviene usarle entrambe**: si completano. In live il report elenca anche
@@ -68,19 +72,21 @@ python3 recon/docker-configuration/docker_config_audit.py --context staging
 
 # includi anche i container fermi
 python3 recon/docker-configuration/docker_config_audit.py --docker-host ssh://deploy@staging.example.com --all
+
+# run veloce: niente docker top/diff, niente docker-bench
+python3 recon/docker-configuration/docker_config_audit.py --docker-host ssh://deploy@staging.example.com --skip probes,bench
 ```
 
 Requisiti per il remoto: `docker` CLI su Kali, accesso SSH con chiave
-all'host, utente remoto nel gruppo `docker`.
+all'host (`BatchMode`: niente prompt di password), utente remoto nel gruppo `docker`.
 
 ### Scansione delle immagini in uso (`--scan-images`)
 ```bash
 python3 recon/docker-configuration/docker_config_audit.py --docker-host ssh://deploy@staging.example.com --scan-images
 ```
-Lancia `trivy image` su ogni immagine usata dai container: CVE
-HIGH/CRITICAL, secret rimasti nei layer, misconfigurazioni della config
-dell'immagine. Su host remoto l'immagine viene prima scaricata con
-`docker save`, quindi puo' richiedere tempo e banda. Alza `--timeout` per
+Usa tutti gli scanner gia' presenti (vedi sotto). Le CVE HIGH/CRITICAL
+trovate da piu' scanner vengono unite e deduplicate per CVE + pacchetto.
+Con `--scanners trivy,dockle` limiti quali usare. Alza `--timeout` per
 immagini grandi.
 
 ### Correlazione con port-scan (`--active`)
@@ -94,6 +100,12 @@ pubblicata su `0.0.0.0` che risulta aperta anche nello scan esterno diventa
 `exposure-confirmed`: HIGH, oppure CRITICAL se e' un DB, Redis, l'API Docker
 e simili.
 
+### In CI
+```bash
+python3 recon/docker-configuration/docker_config_audit.py --path . --min-severity MEDIUM --fail-on HIGH
+```
+Exit code `3` se c'e' almeno un finding HIGH o CRITICAL.
+
 ### Tutto insieme
 ```bash
 python3 recon/docker-configuration/docker_config_audit.py \
@@ -104,64 +116,119 @@ python3 recon/docker-configuration/docker_config_audit.py \
   --label example.com
 ```
 
+## Cosa raccoglie in live (tutto read-only)
+
+| Fonte | Per cosa |
+|---|---|
+| `docker version` / `docker info` | versione engine e **runc** (escape noti: CVE-2024-21626, CVE-2025-31133/52565/52881), opzioni di sicurezza, registry insicuri, warning del daemon |
+| `docker inspect` | configurazione effettiva di ogni container |
+| `docker image inspect` | eta' dell'immagine, drift del tag (container non ricreato dopo l'aggiornamento) |
+| `docker network inspect` | bridge di default con ICC, overlay non cifrati, macvlan/ipvlan |
+| `docker top` | processi nel container: sshd, miner, reverse shell, tunnel; utente reale dei processi |
+| `docker diff` | modifiche al filesystem dall'avvio: `/etc/passwd`, cron, `.ssh`, `ld.so.preload`, binari di sistema, file eseguibili/nascosti in `/tmp` |
+
+### Analisi integrata (senza scanner esterni)
+Quasi nessun server ha trivy/grype/dockle: lo script copre il piu' possibile da solo.
+
+| Fonte | Per cosa |
+|---|---|
+| `docker cp <id>:/etc/os-release -` | distribuzione dell'immagine → **OS fuori supporto** (Alpine, Debian, Ubuntu, CentOS...) o in scadenza entro 90 giorni. Legge il file tramite il daemon: nessun processo eseguito nel container |
+| `docker cp <id>:/etc/passwd -` | account con UID 0 oltre a root (`extra-uid0`) |
+| env dell'immagine (`PHP_VERSION`, `NODE_VERSION`, `PYTHON_VERSION`, `MYSQL_VERSION`, `PG_MAJOR`) | **runtime fuori supporto** |
+| `docker history --no-trunc` | secret nei layer: build-arg (`RUN \|1 TOKEN=...`), `ENV`/`ARG` con valore, token riconoscibili; `curl \| sh`, TLS disattivato |
+| `/proc/<pid>/status` dei container (lato host, leggibile da qualsiasi utente) | stato **effettivo**: seccomp attivo, capability nel bounding set, UID reale, user namespace |
+| `stat` sui sorgenti dei bind mount e sui `.env` dei progetti compose | directory montate scrivibili da tutti, `.env` leggibili da tutti (mai letto il contenuto) |
+| `~/.docker/config.json` dell'utente SSH | credenziali di registry in chiaro (conta solo le voci) |
+| `systemctl is-active ufw firewalld` | firewall attivo ma scavalcato dalle porte pubblicate da Docker |
+| `stat` su `/var/lib/docker`, `/etc/docker`, unit systemd, socket containerd | permessi (CIS sezione 3) |
+| `docker network inspect`, `docker volume ls -f dangling=true` | reti condivise tra progetti compose diversi, volumi orfani |
+
+Senza scanner non c'e' il database delle CVE: un OS o un runtime fuori
+supporto e' l'indicatore piu' affidabile disponibile, perche' accumula CVE
+che non verranno mai corrette.
+
+### Check sull'host
+Con `--docker-host ssh://...` (o un `--context` ssh, o `--live` su Linux)
+sulla **stessa connessione SSH** viene eseguito uno script `sh` di sola
+lettura passato su stdin. Legge:
+- `/etc/docker/daemon.json` (icc, no-new-privileges, userland-proxy, log-opts, `hosts`)
+- `ExecStart` di `docker.service` e riga di comando di `dockerd` → API `tcp://` senza `--tlsverify`
+- permessi del socket (atteso `root:docker 660`) e membri del gruppo `docker`
+- porte 2375/2376 in ascolto
+- quali tool sono gia' installati sul server e se `sudo -n` e' disponibile
+
+Con Docker Desktop (daemon in una VM) o un daemon `tcp://` questi check
+vengono saltati.
+
+### Tool gia' presenti: rilevati e usati in automatico
+Lo script **non installa nulla**: cerca i tool in locale (PATH) e sul server
+(via SSH) e usa quelli che trova. L'intestazione del report dice quali.
+
+| Tool | Dove | Cosa aggiunge |
+|---|---|---|
+| `docker-bench-security` | server (PATH, `/opt`, `/usr/local`, `/usr/share`, `~`) | CIS Docker Benchmark completo (file del daemon, auditd...). Usa `sudo -n` se disponibile senza password |
+| `trivy image` | server se presente, altrimenti locale | CVE HIGH/CRITICAL, secret nei layer, misconfig della config immagine |
+| `grype` | server se presente, altrimenti locale | CVE, unite a quelle di trivy |
+| `dockle` | server se presente, altrimenti locale | best practice CIS sulle immagini (`CIS-DI-*`) |
+| `docker scout` | locale (plugin di Docker Desktop) | CVE, solo se mancano trivy e grype; richiede `docker login` |
+| `hadolint`, `trivy config`, `kics` | locale | statica: Dockerfile (+ compose con kics) |
+
+Se uno scanner e' sul server l'immagine viene analizzata li' (niente
+trasferimento); se c'e' solo in locale e il daemon e' remoto, l'immagine
+viene esportata **una volta** con `docker save` e passata a tutti gli
+scanner locali. Se un tool manca, lo script lo salta con un warning.
+
 ## Cosa controlla
 
-### Regole integrate (compose + container live)
-| Regola | Severita' | Condizione |
-|---|---|---|
-| `privileged` | CRITICAL | `privileged: true` |
-| `docker-socket` | CRITICAL | `/var/run/docker.sock` montato, anche in read-only |
-| `sensitive-mount` | HIGH (rw) / MEDIUM (ro) | bind di `/`, `/etc`, `/proc`, `/sys`, `/root`, `/boot`, `/dev`, `/var/lib/docker`, `/run`, `/home` |
-| `dangerous-capabilities` | HIGH | `cap_add` con `SYS_ADMIN`, `SYS_PTRACE`, `NET_ADMIN`, `ALL`... |
-| `network-host` / `pid-host` / `ipc-host` | HIGH / HIGH / MEDIUM | namespace condivisi con l'host |
-| `security-profile-disabled` | HIGH | `seccomp:unconfined`, `apparmor:unconfined`, `label:disable` |
-| `sensitive-port-public` | HIGH | DB, cache, API Docker o pannelli admin pubblicati su tutte le interfacce |
-| `port-public` | LOW | altre porte pubblicate su tutte le interfacce |
-| `env-secret` | MEDIUM | `*PASSWORD*`, `*SECRET*`, `*TOKEN*`, `*API_KEY*`... valorizzate in chiaro. Il valore viene mascherato |
-| `root-user` | MEDIUM | live: il container gira come root; compose: `user: root` esplicito |
-| `host-device` | MEDIUM | device dell'host esposti |
-| `no-new-privileges`, `writable-rootfs`, `no-memory-limit`, `no-pids-limit`, `image-latest` | LOW | hardening mancante |
+Ogni finding ha **categoria**, riferimento **CIS Docker Benchmark v1.6.0**
+(dove esiste) e **remediation**.
 
-### Solo live
-| Regola | Severita' |
+| Categoria | Regole principali |
 |---|---|
-| `daemon-no-seccomp` | HIGH |
-| `daemon-warning` (es. API su 2375 senza TLS) | CRITICAL / INFO |
-| `daemon-rootful` (no rootless, no userns-remap) | LOW |
-| `exposure-confirmed`, `docker-api-exposed` (con `--active`) | CRITICAL / HIGH |
+| Catene di attacco | `chain-exposed-escape` (porta esposta + privileged / docker.sock / mount dell'host / SYS_ADMIN / pid host), `chain-exposed-vulnerable-root` (esposto + root + CVE CRITICAL), `chain-exposed-secrets` |
+| Isolamento e container escape | `privileged`, `docker-socket` (anche containerd/podman/crio), `sensitive-mount`, `dangerous-capabilities`, namespace `network/pid/ipc/uts/userns/cgroupns: host`, `security-profile-disabled`, `no-apparmor`, `systempaths-unconfined`, `mount-propagation`, `host-device`, `device-cgroup-rule`, `unsafe-sysctl` |
+| Esposizione di rete | `sensitive-port-public` (DB, Redis, API Docker, kubelet, pannelli admin...), `port-public`, `default-bridge`, `default-bridge-icc`, `overlay-unencrypted`, `exposure-confirmed` / `docker-api-exposed` (con `--active`) |
+| Secret e credenziali | `env-secret` (per nome, una riga per container; esclusi `*_TIME`, `*_PATH`, `*_ENABLED`...), `env-overshare` (secret applicativi dentro DB/cache/proxy: tipico `env_file` condiviso), `secret-pattern` (per formato: AWS key, token GitHub/GitLab/Slack, JWT, chiavi private, `scheme://user:pass@`), `cmdline-secret`, `label-secret` (es. basicauth di traefik), `dockerfile-secret` |
+| Anomalie e indicatori di compromissione | `suspicious-process`, `persistence-fs-change`, `runtime-binary-change`, `suspicious-fs-change`, `fs-drift`, `stale-container-image`, `manual-container`, `restart-loop`, `unhealthy`, `oom-killed` |
+| Daemon e host | `runc-vulnerable`, `docker-version-old`, `daemon-tcp-no-tls`, `docker-api-listening`, `socket-permissions`, `docker-group-members`, `daemon-insecure-registry`, `daemon-no-seccomp`, `daemon-rootful`, `daemon-icc`, `daemon-log-rotation`... + `CIS-x.y` da docker-bench |
+| Vulnerabilita' | `image-vulnerabilities` per immagine (conteggi, quante con fix, CVE principali) |
+| Immagini e supply chain | `image-latest`, `image-old`; Dockerfile: `pipe-to-shell`, `tls-verification-disabled`, `add-remote-url`, `dockerfile-expose-ssh`, `dockerfile-chmod-777`, `dockerfile-sudo`, `dockerfile-no-healthcheck`, `dockerfile-root`; + hadolint / trivy / dockle |
+| Hardening runtime | `root-user`, `no-new-privileges`, `cap-drop-missing`, `writable-rootfs`, `no-healthcheck`, `sshd-in-container` |
+| Risorse | `no-memory-limit`, `no-pids-limit`, `no-cpu-limit`, `oom-kill-disabled`, `no-logging`, `log-no-rotation` |
 
-### Dockerfile
-Check integrati: nessun `USER` non-root, secret in `ENV`/`ARG`, `ADD` da
-URL, `FROM` senza tag. Se installati si aggiungono **hadolint** e
-**trivy config**, con finding marcati `[hadolint]` / `[trivy]`.
-
-Docker Compose **non** e' tra i formati supportati da `trivy config`: per i
-compose valgono le regole integrate sopra.
-
-## Tool esterni (opzionali)
-
-| Tool | Usato per | Installazione su Kali |
-|---|---|---|
-| `docker` (CLI + compose plugin) | modalita' live; `docker compose config` | `sudo apt install docker.io docker-compose` |
-| `hadolint` | lint dei Dockerfile | binario da GitHub releases |
-| `trivy` | `trivy config`, `trivy image` | `sudo apt install trivy` |
-
-Se un tool manca, lo script lo salta con un warning e non si blocca.
+Per ridurre i falsi positivi:
+- `root-user` scende a LOW se `docker top` mostra che i processi girano come
+  utente non-root (entrypoint con gosu/su-exec, es. redis, postgres);
+- `restart-loop` e' MEDIUM solo se l'ultimo exit code e' diverso da 0; restart puliti
+  (worker con `--max-time`) sono INFO;
+- con `--all` i container non in esecuzione sono marcati `[fermo: exited]` nel target;
+- in un Dockerfile multi-stage `FROM <stage>` non e' un'immagine senza tag ed eredita l'`USER` dello stage;
+- Docker aggiunge da solo `label=disable` ai container privileged o con
+  `pid: host`: in quel caso non viene segnalato una seconda volta.
 
 ## Output
 
-- `findings.txt`: riepilogo per target, ordinato per severita' (anche su stdout)
-- `findings.json`: findings completi + metadati (file analizzati, container, conteggi CVE per immagine)
-- `raw/`: `docker-inspect.json`, `docker-info.json`, compose risolti e output JSON di hadolint/trivy
+- `findings.txt` (anche su stdout): intestazione con versioni e tool usati,
+  riepilogo per severita' e categoria, **classifica dei target per
+  punteggio di rischio** (0-100: CRITICAL 40, HIGH 15, MEDIUM 5, LOW 1),
+  poi i finding **raggruppati per categoria e per regola**: un problema
+  ripetuto su 20 container e' un blocco solo, con fix e lista dei target.
+  In coda: vulnerabilita' per immagine e file compose usati sull'host.
+- `by-target.txt`: gli stessi finding visti per container/servizio
+- `findings.json`: findings completi, `risk_scores`, `summary_by_category`, metadati (container, immagini, tool)
+- `findings.csv`: una riga per finding, per Excel / ticketing
+- `raw/`: `docker-inspect.json`, `docker-info.json`, `docker-version.json`,
+  `docker-networks.json`, `top-*.json`, `diff-*.txt`, `host-checks.txt`,
+  `docker-bench.json`, compose risolti e output JSON dei tool
 
-I valori delle variabili che sembrano secret sono **mascherati anche nei
-file raw** (`***(N char)`). Il resto dell'inspect (mount, label, comandi)
-resta integro: `output/` e' in `.gitignore`, ma tratta comunque la cartella
-come materiale riservato.
+I valori che sembrano secret (per nome della variabile **o per formato del
+valore**) sono **mascherati anche nei file raw** (`***(N char)`): env,
+label, Cmd/Entrypoint, argomenti, processi. `output/` e' in `.gitignore`,
+ma tratta comunque la cartella come materiale riservato.
 
-Exit code: `0` se il run e' completo, `1` se e' stata chiesta la modalita'
-live ma il daemon non era raggiungibile (report parziale), `2` per input non
-valido.
+Exit code: `0` run completo, `1` modalita' live chiesta ma daemon non
+raggiungibile (report parziale), `2` input non valido, `3` con `--fail-on`
+se ci sono finding di quella severita' o superiore.
 
 ---
 
@@ -172,22 +239,30 @@ valido.
 | `--path` | — | File o cartella da analizzare staticamente (ripetibile) |
 | `--live` | off | Analizza i container del daemon locale |
 | `--docker-host` | — | Daemon remoto, es. `ssh://user@host` (implica `--live`) |
-| `--context` | — | `docker context` da usare (implica `--live`) |
+| `--context` | — | `docker context` da usare (implica `--live`; se e' ssh:// abilita i check sull'host) |
 | `--all` | off | Live: includi anche i container fermi |
-| `--scan-images` | off | Live: `trivy image` sulle immagini in uso |
+| `--scan-images` | off | Live: CVE / secret / best practice delle immagini con gli scanner presenti |
+| `--scanners` | tutti i presenti | Limita gli scanner: `trivy,grype,dockle,docker-scout` |
+| `--skip` | — | Salta fasi live: `host`, `bench`, `probes` (top/diff), `networks`, `deep` (os-release/passwd/history) |
+| `--workers` | `4` | Container sondati in parallelo con top/diff |
 | `--active` | — | `results.json` di port-scan per confermare l'esposizione |
 | `--min-severity` | `INFO` | Mostra solo da questa severita' in su |
+| `--fail-on` | — | Exit code 3 se ci sono finding da questa severita' in su |
 | `-o, --output` | `<radice>/output` | Cartella base (relativa alla radice o assoluta) |
 | `--label` | host di `--docker-host`, context, `localhost` o nome della cartella | Nome sotto-cartella output |
-| `--timeout` | `600` | Timeout per singolo comando (secondi) |
+| `--timeout` | `600` | Timeout per singolo comando (secondi; docker-bench almeno 900) |
 | `--json` | off | Stampa il JSON completo su stdout |
 
 Serve almeno uno tra `--path` e `--live`/`--docker-host`/`--context`.
 
 ## Prossimi passi suggeriti
 
-- **docker-bench-security** (CIS Docker Benchmark) direttamente sul server,
-  per i controlli che richiedono root sull'host: permessi dei file del
-  daemon, auditd, configurazione di `daemon.json`.
+- Se `docker-bench-security` non e' sul server, i check che richiedono root
+  sull'host (permessi dei file del daemon, auditd) restano scoperti:
+  valuta di lanciarlo a mano da un account amministratore.
 - Per i finding `docker-socket` / `privileged` / `sensitive-mount`:
   verifica dall'interno del container cosa ottiene un attaccante (`deepce`).
+- Per i finding *Anomalie e indicatori di compromissione*
+  (`suspicious-process`, `persistence-fs-change`): non ricreare subito il
+  container, prima conserva le evidenze (`docker export`, `docker logs`,
+  `raw/diff-*.txt`).

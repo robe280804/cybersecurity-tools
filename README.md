@@ -17,10 +17,11 @@ con `git pull`.
  3. port-scan          host/IP  -> IP + porte aperte + servizi    (attivo)
  4. service-audit      IP       -> check su FTP/MySQL/Postgres/SMTP trovati (attivo)
  5. web-enum           host/URL -> stack tecnologico + route/API nascoste  (attivo)
- 6. recon-report       (tutto)  -> unisce 2+3 in un'unica vista leggibile
+ 6. vuln-scan          host/URL -> CVE/misconfig/takeover via nuclei      (attivo, invasivo)
+ 7. recon-report       (tutto)  -> unisce 2+3 in un'unica vista leggibile
 
  Interno (configurazione del server, non traffico verso il target):
- *  docker-configuration  compose/Dockerfile/container -> misconfigurazioni Docker (statico / live)
+ *  docker-configuration  compose/Dockerfile/container/host -> audit sicurezza Docker (statico / live, CIS)
 ```
 
 Ogni step e' indipendente: puoi lanciarli singolarmente, o incatenarli
@@ -34,7 +35,8 @@ passando l'output di uno come input del successivo (ogni script accetta
 | 3 | `resolve_and_scan.py` | `recon/port-scan/` | [recon/port-scan/execute.md](recon/port-scan/execute.md) |
 | 4 | `service_audit.py` | `recon/service-audit/` | [recon/service-audit/execute.md](recon/service-audit/execute.md) |
 | 5 | `web_enum.py` | `recon/web-enum/` | [recon/web-enum/execute.md](recon/web-enum/execute.md) |
-| 6 | `consolidate.py` | `recon/report/` | [recon/report/execute.md](recon/report/execute.md) |
+| 6 | `vuln_scan.py` | `recon/vuln-scan/` | [recon/vuln-scan/execute.md](recon/vuln-scan/execute.md) |
+| 7 | `consolidate.py` | `recon/report/` | [recon/report/execute.md](recon/report/execute.md) |
 | * | `docker_config_audit.py` | `recon/docker-configuration/` | [recon/docker-configuration/execute.md](recon/docker-configuration/execute.md) |
 
 **Ogni cartella ha il suo `execute.md`** con tutti i casi d'uso concreti
@@ -51,7 +53,7 @@ output/<nome-tool>/<dominio-target>/<timestamp>/<file-di-risultato>
 
 - **`<nome-tool>`** identifica *quale script* ha prodotto il risultato
   (`subdomain-enum`, `live-host-probe`, `port-scan`, `service-audit`,
-  `web-enum`, `recon-report`, `docker-configuration`) — cosi' scansioni diverse sullo stesso dominio non si
+  `web-enum`, `vuln-scan`, `recon-report`, `docker-configuration`) — cosi' scansioni diverse sullo stesso dominio non si
   mescolano mai in cartelle indistinguibili.
 - **`<dominio-target>`** raggruppa i run per target: se passi piu'
   sottodomini dello stesso apex (es. `a.staging.example.com`,

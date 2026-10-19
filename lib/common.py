@@ -77,6 +77,10 @@ def run_cmd(cmd: list[str], timeout: int, input_text: str | None = None) -> tupl
             input=input_text,
             capture_output=True,
             text=True,
+            # UTF-8 esplicito: su Windows il default (cp1252) rompe il
+            # thread di lettura alla prima sequenza non mappabile
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -99,7 +103,7 @@ def run_cmd_ext(cmd: list[str], timeout: int, input_text: str | None = None) -> 
     try:
         proc = subprocess.run(
             cmd, input=input_text, capture_output=True, text=True,
-            timeout=timeout, check=False,
+            encoding="utf-8", errors="replace", timeout=timeout, check=False,
         )
         return proc.returncode, proc.stdout, proc.stderr, False
     except FileNotFoundError:
